@@ -28,7 +28,7 @@ dsh-plugins/
     └── dsh-workbench/              # 纯 JavaScript，含测试
 ```
 
-每个插件是独立的 npm 包，彼此互不依赖。细节见 [plugins/README.md](plugins/README.md) 及各插件自己的 README。
+每个插件是独立的 npm 包，彼此互不依赖，各自目录下带有自己的 README。
 
 ## 安装
 
