@@ -6,11 +6,11 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		const React = require("react");
 		const h = React.createElement;
-		const { useState, useEffect, useCallback } = React;
+		const { useState, useEffect, useCallback, useRef } = React;
 
 		// ── styles: one tagged sheet, claimed by the loader on unload ────────
 		const CSS = `
-.dwb-root { position: absolute; top: 0; right: 0; bottom: 0; width: 344px; display: flex; flex-direction: column; background: var(--dsw-alias-bg-layer-2); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: -8px 0 24px rgba(0,0,0,.08); color: var(--dsw-alias-label-primary); font-size: 13px; overflow: hidden; }
+.dwb-root { position: absolute; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--dsw-alias-bg-layer-2); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: -8px 0 24px rgba(0,0,0,.08); color: var(--dsw-alias-label-primary); font-size: 13px; overflow: hidden; }
 .dwb-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); flex: none; }
 .dwb-title { font-weight: 600; font-size: 13px; flex: none; }
 .dwb-pathinput { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font-size: 11px; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; outline: none; }
@@ -101,6 +101,16 @@ window.__ModuleLoader__.load({
 .dwb-previewimg { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
 .dwb-previewaudio { width: 100%; }
 .dwb-previewvideo { max-width: 100%; max-height: 100%; border-radius: 6px; background: #000; }
+.dwb-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.dwb-resize::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 4px; height: 40px; border-radius: 4px; background: var(--dsw-alias-button-floating-fill); border: 1px solid var(--dsw-alias-border-l2-darkmode-thin); opacity: 0; transition: opacity var(--ds-transition-duration-slow) var(--ds-ease-in-out), background var(--ds-transition-duration-slow) var(--ds-ease-in-out); }
+.dwb-resize:hover::after, .dwb-resize[data-dragging='true']::after { opacity: 1; }
+.dwb-resize:hover::after, .dwb-resize[data-dragging='true']::after { background: var(--dsw-alias-button-floating-hover); border-color: var(--dsw-alias-border-l3); }
+.dwb-split { flex: 1; min-height: 0; display: flex; }
+.dwb-split-pane { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+.dwb-split-divider { flex: none; width: 5px; cursor: col-resize; touch-action: none; position: relative; }
+.dwb-split-divider::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 2px; height: 40px; border-radius: 2px; background: var(--dsw-alias-border-l2); opacity: 0; transition: opacity var(--ds-transition-duration-slow) var(--ds-ease-in-out), background var(--ds-transition-duration-slow) var(--ds-ease-in-out); }
+.dwb-split-divider:hover::after, .dwb-split-divider[data-dragging='true']::after { opacity: 1; background: var(--dsw-alias-border-l3); }
+.dwb-dragging, .dwb-dragging * { user-select: none !important; }
 @media (prefers-reduced-motion: reduce) { .dwb-tip { animation: none; } }
 `;
 		if (typeof document !== "undefined" && document.getElementById("dsh-workbench-style") === null) {
@@ -119,6 +129,32 @@ window.__ModuleLoader__.load({
 			if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
 			if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
 			return bytes + " B";
+		}
+		// ── panel geometry: widths, clamps, persistence ──────────────────────
+		const PANEL_MIN = 280;
+		const SPLIT_MIN = 480;
+		const AUTO_WIDEN = 720;
+		const PANEL_DEFAULT = 344;
+		const TREE_DEFAULT = 240;
+		const WIDTH_KEY = "dsh-workbench.width";
+		const SPLIT_KEY = "dsh-workbench.split";
+		function readStored(key, fallback) {
+			try {
+				const raw = window.localStorage.getItem(key);
+				const value = raw === null ? NaN : Number(raw);
+				return Number.isFinite(value) && value > 0 ? value : fallback;
+			} catch {
+				return fallback;
+			}
+		}
+		function writeStored(key, value) {
+			try { window.localStorage.setItem(key, String(Math.round(value))); } catch { /* private mode: session-only */ }
+		}
+		function clampPanelWidth(width, maxWidth) {
+			return Math.min(maxWidth, Math.max(PANEL_MIN, Math.round(width)));
+		}
+		function clampTreeWidth(width, panelWidth) {
+			return Math.min(Math.round(panelWidth * 0.6), Math.max(160, Math.round(width)));
 		}
 		function toNode(entry) {
 			const node = {
@@ -355,7 +391,11 @@ window.__ModuleLoader__.load({
 					});
 				return () => controller.abort();
 			}, [file.path, kind]);
-			const back = h(TipButton, { tip: "返回目录", className: "dwb-minibtn", onClick: props.onClose }, h("span", null, "←"));
+			// Split mode hides the ← back affordance (the tree stays visible);
+			// narrow full-pane mode keeps it.
+			const back = props.back === false
+				? null
+				: h(TipButton, { tip: "返回目录", className: "dwb-minibtn", onClick: props.onClose }, h("span", null, "←"));
 			const subtitle = (file.size !== undefined ? formatSize(file.size) : "") + (kind === "other" ? " · " + file.name.split(".").pop() + " 类型" : "");
 			const header = h("div", { className: "dwb-previewheader" },
 				back,
@@ -363,6 +403,9 @@ window.__ModuleLoader__.load({
 					h("div", { className: "dwb-previewname", title: file.path }, file.name),
 					h("div", { className: "dwb-previewsub" }, subtitle),
 				),
+				props.back !== false
+					? null
+					: h(TipButton, { tip: "关闭预览", className: "dwb-minibtn", onClick: props.onClose }, closeIcon()),
 			);
 			let body;
 			if (kind === "text") {
@@ -548,12 +591,71 @@ window.__ModuleLoader__.load({
 			const [commitMessage, setCommitMessage] = useState("");
 			const [showIgnored, setShowIgnored] = useState(false);
 			const [selected, setSelected] = useState(null);
+			// Panel geometry: persisted width + tree pane width + live max bound.
+			const [width, setWidth] = useState(() => readStored(WIDTH_KEY, PANEL_DEFAULT));
+			const [treeWidth, setTreeWidth] = useState(() => readStored(SPLIT_KEY, TREE_DEFAULT));
+			const [maxWidth, setMaxWidth] = useState(() => window.innerWidth - PANEL_MIN);
+			const [resizing, setResizing] = useState(false);
+			const [splitting, setSplitting] = useState(false);
+			const rootRef = useRef(null);
+			// Drag origins: the pointer's start x plus the value snapshot at
+			// pointerdown (dx is measured against the pointer, not the value).
+			const resizeOrigin = useRef({ x: 0, width });
+			const splitOrigin = useRef({ x: 0, width: treeWidth });
 
 			const path = pathOverride !== undefined ? pathOverride : cwd;
 			useEffect(() => { setPathOverride(undefined); }, [cwd]);
 			useEffect(() => { setCommitMessage(""); }, [path]);
 			// A session/cwd switch invalidates the selected file's path.
 			useEffect(() => { setSelected(null); }, [path]);
+
+			// Persist the panel and tree widths (clamped) whenever they change.
+			useEffect(() => { writeStored(WIDTH_KEY, width); }, [width]);
+			useEffect(() => { writeStored(SPLIT_KEY, treeWidth); }, [treeWidth]);
+
+			// Live max bound = frame width − sidebar's rendered width (the panel
+			// may cover everything right of the sidebar, never the sidebar).
+			// The panel lives in the shell.overlay layer (positioned ancestor),
+			// whose parent is the AppFrame grid; its first child is the sidebar
+			// column. window resize and sidebar changes both land here.
+			useEffect(() => {
+				const measure = () => {
+					const layer = rootRef.current !== null ? rootRef.current.offsetParent : null;
+					const frame = layer !== null ? layer.parentElement : null;
+					const sidebar = frame !== null && frame.firstElementChild !== null ? frame.firstElementChild : null;
+					const sidebarWidth = sidebar !== null ? sidebar.getBoundingClientRect().width : 0;
+					const frameWidth = frame !== null ? frame.getBoundingClientRect().width : window.innerWidth;
+					setMaxWidth(Math.max(PANEL_MIN, Math.round(frameWidth - sidebarWidth)));
+				};
+				measure();
+				window.addEventListener("resize", measure);
+				let observer = null;
+				const layer = rootRef.current !== null ? rootRef.current.offsetParent : null;
+				const frame = layer !== null ? layer.parentElement : null;
+				const sidebar = frame !== null && frame.firstElementChild !== null ? frame.firstElementChild : null;
+				if (sidebar !== null) {
+					observer = new ResizeObserver(measure);
+					observer.observe(sidebar);
+				}
+				return () => {
+					window.removeEventListener("resize", measure);
+					if (observer !== null) observer.disconnect();
+				};
+			}, []);
+
+			// Keep the panel within the live bound, and FOLLOW the bound when the
+			// panel was already pinned to it (sidebar collapse/expand or window
+			// resize widens the right content area → a pinned panel expands too).
+			const maxWidthRef = useRef(maxWidth);
+			useEffect(() => {
+				const previous = maxWidthRef.current;
+				maxWidthRef.current = maxWidth;
+				if (maxWidth === previous) return;
+				setWidth((current) => {
+					if (current >= previous - 2) return clampPanelWidth(maxWidth, maxWidth);
+					return clampPanelWidth(current, maxWidth);
+				});
+			}, [maxWidth]);
 
 			const [pathText, setPathText] = useState(path || "");
 			useEffect(() => { setPathText(path || ""); }, [path]);
@@ -562,6 +664,53 @@ window.__ModuleLoader__.load({
 				const trimmed = pathText.trim();
 				setPathOverride(trimmed.length > 0 && trimmed !== cwd ? trimmed : undefined);
 			};
+
+			// ── panel resize drag (left edge) ────────────────────────────────
+			const onResizePointerDown = (event) => {
+				event.preventDefault();
+				event.currentTarget.setPointerCapture(event.pointerId);
+				resizeOrigin.current = { x: event.clientX, width };
+				setResizing(true);
+			};
+			const onResizePointerMove = (event) => {
+				if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+				// Panel is docked right: dragging left (negative dx) widens it.
+				const dx = event.clientX - resizeOrigin.current.x;
+				setWidth(clampPanelWidth(resizeOrigin.current.width - dx, maxWidth));
+			};
+			const onResizePointerUp = (event) => {
+				if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+				event.currentTarget.releasePointerCapture(event.pointerId);
+				setResizing(false);
+			};
+			const onResizeDoubleClick = () => {
+				setWidth(clampPanelWidth(PANEL_DEFAULT, maxWidth));
+			};
+
+			// ── split divider drag (tree pane width) ─────────────────────────
+			const onDividerPointerDown = (event) => {
+				event.preventDefault();
+				event.currentTarget.setPointerCapture(event.pointerId);
+				splitOrigin.current = { x: event.clientX, width: treeWidth };
+				setSplitting(true);
+			};
+			const onDividerPointerMove = (event) => {
+				if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+				const dx = event.clientX - splitOrigin.current.x;
+				setTreeWidth(clampTreeWidth(splitOrigin.current.width + dx, width));
+			};
+			const onDividerPointerUp = (event) => {
+				if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+				event.currentTarget.releasePointerCapture(event.pointerId);
+				setSplitting(false);
+			};
+
+			// Opening a file from a narrow panel widens it enough to split.
+			const onSelect = (node) => {
+				if (width < SPLIT_MIN) setWidth(clampPanelWidth(AUTO_WIDEN, maxWidth));
+				setSelected(node);
+			};
+			const onClosePreview = () => { setSelected(null); };
 
 			const listDir = useCallback(async (dirPath, signal) => {
 				const options = signal === undefined ? {} : { signal };
@@ -732,7 +881,22 @@ window.__ModuleLoader__.load({
 				return h(TipButton, { tip: "展开工作面板", className: "dwb-openbtn", onClick: () => setOpen(true) }, panelIcon());
 			}
 
-			return h("div", { className: "dwb-root" },
+			const splitMode = selected !== null && width >= SPLIT_MIN;
+
+			return h("div", {
+				ref: rootRef,
+				className: "dwb-root" + ((resizing || splitting) ? " dwb-dragging" : ""),
+				style: { width: width + "px" },
+			},
+				h("div", {
+					className: "dwb-resize",
+					"data-dragging": resizing || undefined,
+					title: "拖动调整宽度（双击重置）",
+					onPointerDown: onResizePointerDown,
+					onPointerMove: onResizePointerMove,
+					onPointerUp: onResizePointerUp,
+					onDoubleClick: onResizeDoubleClick,
+				}),
 				h("div", { className: "dwb-header" },
 					h("span", { className: "dwb-title" }, "工作面板"),
 					h("input", {
@@ -756,9 +920,23 @@ window.__ModuleLoader__.load({
 					h(TipButton, { tip: "Git", className: "dwb-tabbtn", active: tab === "git", onClick: () => setTab("git") }, branchIcon()),
 				),
 				tab === "files"
-					? (selected !== null
-						? h(FilePreview, { file: selected, onClose: () => setSelected(null) })
-						: h(FilesView, { refreshing, root, onToggle, selected, onSelect: (node) => setSelected(node) }))
+					? (splitMode
+						? h("div", { className: "dwb-split" },
+							h("div", { className: "dwb-split-pane", style: { width: treeWidth + "px" } },
+								h(FilesView, { refreshing, root, onToggle, selected, onSelect })),
+							h("div", {
+								className: "dwb-split-divider",
+								"data-dragging": splitting || undefined,
+								onPointerDown: onDividerPointerDown,
+								onPointerMove: onDividerPointerMove,
+								onPointerUp: onDividerPointerUp,
+							}),
+							h("div", { className: "dwb-split-pane", style: { flex: 1 } },
+								h(FilePreview, { file: selected, back: false, onClose: onClosePreview })),
+						)
+						: (selected !== null
+							? h(FilePreview, { file: selected, back: true, onClose: onClosePreview })
+							: h(FilesView, { refreshing, root, onToggle, selected, onSelect })))
 					: h(GitView, {
 						refreshing,
 						state: git,
