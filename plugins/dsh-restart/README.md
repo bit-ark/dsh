@@ -12,8 +12,8 @@ Terminal.app，复用窗口、不新增不关闭）。
 - **重启流程**（宿主路由驱动，全程写日志到 `~/.dsh/restart.log`）：延迟约 4
   秒让 HTTP 响应先送达 → 终止 3080 上当前服务及其 pnpm 包装进程 → 等端口释放
   → 通过 osascript 把 `cd <cwd> && pnpm dsh web` 发进**同一个服务终端窗口**
-  （窗口已关则开新窗口；osascript 不可用则回退为 nohup 无终端重启）→ curl
-  自检 3080 直到恢复。
+  （找不到该窗口或 osascript 不可用时回退为 nohup 无终端重启，不另开新窗口）→
+  curl 自检 3080 直到恢复。
 - **提示**：成功/失败优先用 dsh-notify 的 `notifier` toast（特性探测，缺席时
   页面内提示，功能照常）。
 

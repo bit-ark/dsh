@@ -9,10 +9,11 @@
  * 重启语义（与终端协同，保持终端归属）：
  *  - 写入重启助手脚本 ~/.dsh/restart-helper.sh，用 detached 子进程执行并立即
  *    返回（脚本 sleep delayMs 让 HTTP 响应先送达浏览器，再杀当前进程）。
- *  - 脚本终止 3080 上命令匹配 `bin.ts web` 的进程及其 pnpm 包装父进程，等端口
- *    释放后，通过 osascript 把 `cd <cwd> && <command>` 发进**同一个服务终端
- *    窗口**（标题匹配 pnpm dsh web / node ◂）；窗口已关则开新窗口；osascript
- *    不可用（权限被拒）则回退为 nohup 无终端重启，保证服务一定能回来。
+ *  - 脚本终止 3080 上命令匹配 `bin.ts web` / `bin.js web` 的进程及其 pnpm
+ *    包装父进程，等端口释放后，通过 osascript 把 `cd <cwd> && <command>` 发进
+ *    **同一个服务终端窗口**（标题匹配 pnpm dsh web / node ◂）；找不到该窗口或
+ *    osascript 不可用（权限被拒）则回退为 nohup 无终端重启（不另开新窗口），
+ *    保证服务一定能回来。
  *  - 全程写日志到 config.logPath（默认 ~/.dsh/restart.log），结尾 curl 自检。
  *
  * 平台限制：Terminal.app 控制（osascript）仅 macOS；非 darwin 平台 POST 直接
@@ -108,7 +109,8 @@ if lsof -nP -iTCP:${cfg.port} -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-# 3) 拉起：优先同终端窗口，其次新窗口，最后 nohup 无终端回退
+# 3) 拉起：优先同终端窗口，找不到则 nohup 无终端回退（不另开新窗口，
+#    避免 osascript 误开无关 Terminal 窗口）
 RESTARTED=0
 if [ -n "$TARGET_ID" ] && osascript -e "tell application \\"Terminal\\" to get name of window id $TARGET_ID" >/dev/null 2>&1; then
   osascript -e "tell application \\"Terminal\\" to do script \\"cd ${quotedCwd} && ${cfg.command}\\" in window id $TARGET_ID" 2>&1
@@ -153,6 +155,7 @@ export function apply(ctx, config) {
   /** 防抖：上次触发时间（ms）。4 秒窗口内重复触发被拒绝。 */
   let lastTrigger = 0
 
+  /** 写一个 JSON 响应（禁用缓存，避免浏览器对接口结果做快照）。 */
   const sendJson = (res, code, payload) => {
     res.writeHead(code, {
       'content-type': 'application/json; charset=utf-8',
@@ -161,6 +164,7 @@ export function apply(ctx, config) {
     res.end(JSON.stringify(payload))
   }
 
+  /** 读取并解析 JSON 请求体（上限 64KB；空体视为 {}，解析失败 reject）。 */
   const readJsonBody = (req) => new Promise((resolveBody, reject) => {
     let data = ''
     let settled = false

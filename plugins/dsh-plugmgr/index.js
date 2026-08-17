@@ -216,6 +216,11 @@ async function runPnpm(profileDirPath, args, what) {
     if (error !== null && typeof error === 'object' && error.killed === true) {
       throw new Error(`${what}失败：pnpm 超过 ${PNPM_TIMEOUT_MS / 1000}s 未完成`)
     }
+    // maxBuffer 溢出是独立的错误码（不是超时：killed 为 undefined），单独
+    // 提示，避免用户误以为是 pnpm 卡住。
+    if (error !== null && typeof error === 'object' && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new Error(`${what}失败：pnpm 输出超出 ${PNPM_MAX_BUFFER / 1024 / 1024}MB 上限（通常是有大量日志输出）`)
+    }
     const tail = [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim().split('\n').slice(-8).join('\n')
     const code = error !== null && typeof error === 'object' && typeof error.code === 'number' ? error.code : '?'
     throw new Error(`${what}失败（exit ${String(code)}）：\n${tail}`)
@@ -307,8 +312,11 @@ async function addPlugin(config, dirInput) {
   }
   const { dir: profileDirPath } = profileDir(config)
   const before = readManifest(profileDirPath)
-  if (before.dependencies?.[pkg.name] !== undefined) {
-    throw new Error(`插件 ${pkg.name} 已安装（${before.dependencies[pkg.name]}）`)
+  // 重复检查要同时覆盖 dependencies 与 devDependencies：pnpm add 也会落到
+  // devDependencies（若仓库在 dev 模式），只查前者会让重复安装漏网。
+  if (before.dependencies?.[pkg.name] !== undefined || before.devDependencies?.[pkg.name] !== undefined) {
+    const existing = before.dependencies?.[pkg.name] ?? before.devDependencies?.[pkg.name]
+    throw new Error(`插件 ${pkg.name} 已安装（${existing}）`)
   }
   await runPnpm(profileDirPath, ['add', `link:${dir}`], `添加插件 ${pkg.name}`)
   reconcile(before, readManifest(profileDirPath), profileDirPath)
@@ -390,6 +398,7 @@ function setEnabled(config, packageName, enabled) {
 
 /* ── HTTP 层 ────────────────────────────────────────────────────────── */
 
+/** 写一个 JSON 响应（禁用缓存，避免浏览器对接口结果做快照）。 */
 function sendJson(res, code, payload) {
   res.writeHead(code, {
     'content-type': 'application/json; charset=utf-8',

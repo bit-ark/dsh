@@ -102,6 +102,7 @@ window.__ModuleLoader__.load({
 					};
 				}, []);
 
+				/** 通知提示：优先走 dsh-notify 的 notifier toast（特性探测，缺席降级）。 */
 				const notify = useCallback((input) => {
 					const notifier = getNotifier();
 					if (notifier !== undefined && typeof notifier.notify === "function") {
@@ -162,6 +163,7 @@ window.__ModuleLoader__.load({
 						});
 				}, [busy, confirm, notify]);
 
+				/** 服务状态卡：读失败 / 加载中 / 运行中三态渲染（PID/端口/目录/日志尾部）。 */
 				const statusCard = () => {
 					if (statusError !== null && status === null) {
 						return h("div", { className: "dsr-card" },

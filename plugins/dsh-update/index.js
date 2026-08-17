@@ -153,22 +153,34 @@ export function apply(ctx, config) {
   const root = resolveRepoRoot()
 
   // 缓存 + 在途去重：同一窗口内的并发页面加载只触发一次远端检查。
+  // force=true（recheck）必须真正强制：若恰好有在途检查，等它落地后再
+  // 发一次新检查，而不是把在途结果当"强制重查"返回。
   let cache = null
   let inflight = null
+  const settleInflight = () => {
+    const current = inflight
+    inflight = null
+    return current
+  }
   const getStatus = (force) => {
     if (!force && cache !== null && Date.now() - cache.at < CACHE_TTL_MS) {
       return Promise.resolve(cache.result)
     }
-    if (inflight === null) {
+    const start = () => {
       inflight = runCheck(root, remote, branch).then((result) => {
         cache = { at: Date.now(), result }
         inflight = null
         return result
       })
+      return inflight
     }
-    return inflight
+    if (inflight === null) return start()
+    if (!force) return inflight
+    // force 且在途：先等当前检查落地（拿到最新缓存），再真正重查一次。
+    return settleInflight().then(start)
   }
 
+  /** 写一个 JSON 响应（禁用缓存，避免浏览器对接口结果做快照）。 */
   const sendJson = (res, code, payload) => {
     res.writeHead(code, {
       'content-type': 'application/json; charset=utf-8',
