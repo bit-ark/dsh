@@ -1,9 +1,0 @@
-# dsh-local-plugin-manager bundle layer: inserts the dsh-local-plugin-manager row.
-# The manager reads and mutates the running profile's package.json
-# (dsh.profile.bundles + link:/file: dependencies), the same model the
-# `dsh plugin --profile <name> add|remove` CLI drives.
-- insert:
-    - id: dsh-local-plugin-manager
-      name: dsh-local-plugin-manager
-      # config:
-      #   profile: web        # 管理哪个 profile 的本地插件（默认：web）

@@ -1,0 +1,31 @@
+{
+  "name": "dsh-balance",
+  "version": "0.1.0",
+  "description": "Adds a 设置 (Settings) section showing the DeepSeek account balance (official /user/balance API) and a per-day token-consumption bar chart aggregated from local persisted session logs.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/usage-fold.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

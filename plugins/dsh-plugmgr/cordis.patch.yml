@@ -1,0 +1,9 @@
+# dsh-plugmgr bundle layer: inserts the dsh-plugmgr row.
+# The manager reads and mutates the running profile's package.json
+# (dsh.profile.bundles + link:/file: dependencies), the same model the
+# `dsh plugin --profile <name> add|remove` CLI drives.
+- insert:
+    - id: dsh-plugmgr
+      name: dsh-plugmgr
+      # config:
+      #   profile: web        # 管理哪个 profile 的本地插件（默认：web）

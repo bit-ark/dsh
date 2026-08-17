@@ -1,8 +1,0 @@
-# dsh-workbench bundle layer: one dual-face row. The host Loader imports the
-# package main (node half: git + directory routes), and client-modules picks up
-# the dsh.client declaration for the browser half (right-docked workbench
-# panel). No framework source is modified; install the package and this row
-# mounts everything.
-- insert:
-    - id: workbench
-      name: dsh-workbench

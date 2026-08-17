@@ -1,0 +1,26 @@
+{
+  "name": "dsh-plugmgr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "本地插件管理器：在设置-插件里提供「本地插件」tab，管理通过本地目录安装的插件（列出/添加/移除/禁用/启用）。",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
