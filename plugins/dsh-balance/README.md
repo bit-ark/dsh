@@ -44,9 +44,10 @@ test/usage-fold.test.mjs  纯折叠逻辑断言
   `sessionPersistence.list()/load()` 全量扫描会话日志（zstd 解码在后端内部），
   每个 `(turn, step)` 取最后一个 usage 样本（message 终值替换 chunk 早期值，
   与 harness 自带 token-meter 语义一致），fork/子代理跳过 `seedLength` 继承前缀
-  避免双算。聚合为单遍：工作线程内折叠的同时增量累加历史总计，窗口合计由
-  日桶直接求和（不再二次遍历全部样本）。结果内存缓存 5 分钟（`cacheTtlMs`），
-  `refresh=1` 强制重算；days 上限 90，并发 4，单会话读取失败计数跳过。
+  避免双算。聚合分三趟但同一样本集内存常驻（O(n) 遍历）：分桶 + 全量费用 +
+  按 key 聚合；全量历史总计在折叠时增量累加，窗口合计由日桶直接求和。
+  结果内存缓存 5 分钟（`cacheTtlMs`），`refresh=1` 强制重算，在途计算按
+  `(days, refresh)` 键控去重；days 上限 90，并发 4，单会话读取失败计数跳过。
   响应含 `topKeys`（按 API key 分组的全量消耗 Top 5）：usage 样本经最近的
   `request/header` 归属到 provider 路由，再经 `keyNameByProvider` 映射成凭据
   引用名（同名 key 的多个 provider 合并）。每项（key / 模型 / 日桶 / 合计）还

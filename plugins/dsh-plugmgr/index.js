@@ -192,6 +192,12 @@ function reconcile(before, after, profileDirPath) {
 /**
  * 在 profile 目录异步跑一条 pnpm 命令；失败抛带输出尾部的错误。
  * 异步执行不阻塞事件循环（旧实现 spawnSync 最长可冻结整个 web 服务 120s）。
+ *
+ * shell 处理：仅 Windows 需要 shell 来跑 pnpm 的 .cmd shim（execFile 无法
+ * 直接执行 .bat/.cmd）；其余平台 shell:false，args 按 argv 逐字传递、天然
+ * 免疫命令注入。Windows 的 shell:true 会把 args 拼进命令行（Node DEP0190），
+ * 因此 Windows 上的注入面依赖入参校验——spec/name/dir 都经 safeSpec 白名单
+ * 过滤（见下），含 shell 元字符的输入在到达 pnpm 之前即被拒绝。
  */
 async function runPnpm(profileDirPath, args, what) {
   let result
@@ -215,6 +221,35 @@ async function runPnpm(profileDirPath, args, what) {
     throw new Error(`${what}失败（exit ${String(code)}）：\n${tail}`)
   }
   void result // 成功路径：stdout 仅用于诊断，当前调用方不需要
+}
+
+/**
+ * 包名 / spec 白名单校验：只允许 npm 包名（含 scope、版本范围）与 git spec
+ * 的合法字符，拒绝一切 shell 元字符与空白。npm 包名本身就不含这些字符，
+ * 拒绝不会误伤合法输入；目的是在 Windows shell 透传路径上封死注入面。
+ * 导出供测试。
+ */
+export function safeSpec(input) {
+  const value = String(input ?? '')
+  if (/[;&|<>`$"'()\s\\]/.test(value)) {
+    throw new Error('包名 / spec 含有非法字符（不允许空格、引号与 shell 元字符）')
+  }
+  return value
+}
+
+/**
+ * 本地目录路径校验：允许空格（POSIX argv 逐字传递；目录存在性另有校验），
+ * 只拒绝 shell 元字符，兼顾 Windows shell 透传路径的注入面。
+ */
+function safeDir(input) {
+  const value = String(input ?? '').trim()
+  if (value.length === 0) {
+    throw new Error('请提供插件目录的绝对路径')
+  }
+  if (/[;&|<>`$"'\\]/.test(value)) {
+    throw new Error('目录路径含有非法字符（不允许引号与 shell 元字符）')
+  }
+  return value
 }
 
 /* ── 业务操作 ───────────────────────────────────────────────────────── */
@@ -252,10 +287,7 @@ function listPlugins(config) {
 
 /** 添加一个本地插件目录：校验 → pnpm add link: → reconcile。 */
 async function addPlugin(config, dirInput) {
-  const input = String(dirInput ?? '').trim()
-  if (input.length === 0) {
-    throw new Error('请提供插件目录的绝对路径')
-  }
+  const input = safeDir(dirInput)
   const dir = resolve(input)
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     throw new Error(`目录不存在或不是文件夹：${dir}`)
@@ -285,12 +317,16 @@ async function addPlugin(config, dirInput) {
 
 /** 移除一个已安装插件：仅卸载（pnpm remove + reconcile），保留目录文件。 */
 async function removePlugin(config, packageName) {
+  const name = safeSpec(packageName).trim()
+  if (name.length === 0) {
+    throw new Error('请提供要移除的插件包名')
+  }
   const { dir: profileDirPath } = profileDir(config)
   const before = readManifest(profileDirPath)
-  if (before.dependencies?.[packageName] === undefined) {
-    throw new Error(`插件 ${packageName} 未安装`)
+  if (before.dependencies?.[name] === undefined) {
+    throw new Error(`插件 ${name} 未安装`)
   }
-  await runPnpm(profileDirPath, ['remove', packageName], `移除插件 ${packageName}`)
+  await runPnpm(profileDirPath, ['remove', name], `移除插件 ${name}`)
   reconcile(before, readManifest(profileDirPath), profileDirPath)
   return listPlugins(config)
 }
@@ -300,7 +336,7 @@ async function removePlugin(config, packageName) {
  * 校验 → pnpm add → reconcile。本地目录 spec 走 addPlugin 的目录流程。
  */
 async function addNamedPlugin(config, specInput) {
-  const spec = String(specInput ?? '').trim()
+  const spec = safeSpec(specInput).trim()
   if (spec.length === 0) {
     throw new Error('请输入要安装的包名或 spec（如 whale-girl / @scope/name@1.2.0 / github:user/repo#main）')
   }
@@ -316,7 +352,7 @@ async function addNamedPlugin(config, specInput) {
 
 /** 更新一个已安装插件：pnpm update（按声明范围解析，git spec 重取 ref）。 */
 async function updatePlugin(config, packageName) {
-  const name = String(packageName ?? '').trim()
+  const name = safeSpec(packageName).trim()
   if (name.length === 0) {
     throw new Error('请提供要更新的插件包名')
   }
@@ -332,15 +368,19 @@ async function updatePlugin(config, packageName) {
 
 /** 启用/禁用：只改 dsh.profile.bundles 层列表，依赖保留安装（重启生效）。 */
 function setEnabled(config, packageName, enabled) {
+  const name = safeSpec(packageName).trim()
+  if (name.length === 0) {
+    throw new Error('请提供要启用/禁用的插件包名')
+  }
   const { dir: profileDirPath } = profileDir(config)
   const manifest = readManifest(profileDirPath)
-  if (manifest.dependencies?.[packageName] === undefined) {
-    throw new Error(`插件 ${packageName} 未安装`)
+  if (manifest.dependencies?.[name] === undefined) {
+    throw new Error(`插件 ${name} 未安装`)
   }
   const current = Array.isArray(manifest.dsh?.profile?.bundles) ? [...manifest.dsh.profile.bundles] : []
-  const has = current.includes(packageName)
-  if (enabled && !has) current.push(packageName)
-  if (!enabled && has) current.splice(current.indexOf(packageName), 1)
+  const has = current.includes(name)
+  if (enabled && !has) current.push(name)
+  if (!enabled && has) current.splice(current.indexOf(name), 1)
   if (has !== enabled) {
     manifest.dsh = { ...manifest.dsh, profile: { ...(manifest.dsh?.profile ?? {}), bundles: current } }
     writeManifest(profileDirPath, manifest)
@@ -356,6 +396,19 @@ function sendJson(res, code, payload) {
     'cache-control': 'no-store',
   })
   res.end(JSON.stringify(payload))
+}
+
+/**
+ * CSRF 围栏：POST 只接受 application/json（与 harness /api 面同款约定）。
+ * 浏览器对 text/plain 等「简单请求」不做 CORS 预检，恶意页面可跨站盲发
+ * POST——这里会触发 pnpm add（恶意包 postinstall 可 RCE），必须先按
+ * 内容类型拒掉非 JSON 的跨站提交。
+ */
+function requireJsonMediaType(req) {
+  const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+  if (mediaType !== 'application/json') {
+    throw new Error('content type must be application/json')
+  }
 }
 
 /** 读取并解析 JSON 请求体（上限 64KB）。 */
@@ -431,6 +484,7 @@ export function apply(ctx, config) {
           }
           let body
           try {
+            requireJsonMediaType(req)
             body = await readJsonBody(req)
           } catch (error) {
             sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -449,6 +503,7 @@ export function apply(ctx, config) {
           }
           let body
           try {
+            requireJsonMediaType(req)
             body = await readJsonBody(req)
           } catch (error) {
             sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -467,6 +522,7 @@ export function apply(ctx, config) {
           }
           let body
           try {
+            requireJsonMediaType(req)
             body = await readJsonBody(req)
           } catch (error) {
             sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -485,6 +541,7 @@ export function apply(ctx, config) {
           }
           let body
           try {
+            requireJsonMediaType(req)
             body = await readJsonBody(req)
           } catch (error) {
             sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -503,6 +560,7 @@ export function apply(ctx, config) {
           }
           let body
           try {
+            requireJsonMediaType(req)
             body = await readJsonBody(req)
           } catch (error) {
             sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })

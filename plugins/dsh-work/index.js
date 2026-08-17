@@ -144,21 +144,28 @@ async function inspect(cwd, showIgnored = false) {
       error: gitDir.stderr.trim() !== '' ? gitDir.stderr.trim().split('\n')[0] : (gitDir.error ?? 'not a git repository'),
     }
   }
-  const branch = await currentBranch(cwd)
-  const headResult = await runGit(cwd, ['rev-parse', '--short', 'HEAD'])
-  const head = headResult.ok ? headResult.stdout.trim() : ''
-  const graphResult = await runGit(cwd, [
-    'log', '--graph', '--all', '-n', String(MAX_GRAPH), '--date=short',
-    '--pretty=tformat:%x1e%h%x1f%ad%x1f%an%x1f%s',
+  // 仓库探测之后，分支/HEAD/提交图/状态彼此独立，并行发出（原先串行要
+  // 4~6 个 git 进程的往返时间，合并后接近单次）。
+  const [branchResult, headResult, graphResult, statusResult] = await Promise.all([
+    currentBranch(cwd),
+    runGit(cwd, ['rev-parse', '--short', 'HEAD']),
+    runGit(cwd, [
+      'log', '--graph', '--all', '-n', String(MAX_GRAPH), '--date=short',
+      '--pretty=tformat:%x1e%h%x1f%ad%x1f%an%x1f%s',
+    ]),
+    (() => {
+      const statusArgs = ['--no-optional-locks', 'status', '--porcelain=v1']
+      if (showIgnored) statusArgs.push('--ignored')
+      return runGit(cwd, statusArgs)
+    })(),
   ])
+  const branch = branchResult
+  const head = headResult.ok ? headResult.stdout.trim() : ''
   const graph = graphResult.ok ? parseGraph(graphResult.stdout) : []
-  const statusArgs = ['--no-optional-locks', 'status', '--porcelain=v1']
-  if (showIgnored) statusArgs.push('--ignored')
-  const status = await runGit(cwd, statusArgs)
   const changes = []
   const ignored = []
-  if (status.ok) {
-    for (const line of status.stdout.split('\n')) {
+  if (statusResult.ok) {
+    for (const line of statusResult.stdout.split('\n')) {
       if (line.length < 4) continue
       const code = line.slice(0, 2)
       const path = line.slice(3)
@@ -282,21 +289,23 @@ async function filePreview(absPath) {
   }
   const fd = await open(absPath, 'r')
   try {
+    // fd.read 可能短读（返回的字节数少于请求量），必须按 bytesRead 裁剪，
+    // 否则缓冲区尾部残留的 0 会让文本文件被误判为二进制（looksText 见 NUL）。
     const probeSize = Math.min(stat.size, 8192)
     const probe = Buffer.alloc(probeSize)
-    await fd.read(probe, 0, probeSize, 0)
-    if (!looksText(probe)) {
+    const probeRead = await fd.read(probe, 0, probeSize, 0)
+    if (!looksText(probe.subarray(0, probeRead.bytesRead))) {
       return { ok: true, path: absPath, kind: 'binary', size: stat.size, truncated: false }
     }
     const readSize = Math.min(stat.size, MAX_TEXT_PREVIEW)
     const body = Buffer.alloc(readSize)
-    await fd.read(body, 0, readSize, 0)
+    const bodyRead = await fd.read(body, 0, readSize, 0)
     return {
       ok: true,
       path: absPath,
       kind: 'text',
       size: stat.size,
-      content: body.toString('utf8'),
+      content: body.subarray(0, bodyRead.bytesRead).toString('utf8'),
       truncated: stat.size > MAX_TEXT_PREVIEW,
     }
   } finally {
@@ -441,6 +450,14 @@ export function apply(ctx) {
       sendJson(res, 405, { ok: false, error: 'method not allowed' })
       return
     }
+    // CSRF 围栏：只接受 application/json。浏览器对 text/plain 等「简单请求」
+    // 不做 CORS 预检，恶意页面可以跨站盲发 side-effect POST——harness 自身
+    // /api 面就是这个约定（415），这里保持一致。
+    const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') {
+      sendJson(res, 415, { ok: false, error: 'content type must be application/json' })
+      return
+    }
     const url = new URL(req.url ?? '/', 'http://localhost')
     const validated = validatedCwd(url.searchParams)
     if (validated.error !== undefined) {
@@ -529,7 +546,17 @@ export function apply(ctx) {
           sendJson(res, validated.error === 'not a file' ? 200 : 400, { ok: false, path: validated.path, error: validated.error })
           return
         }
-        const stat = statSync(validated.path)
+        // TOCTOU / EMFILE 兜底：statSync 与 createReadStream 之间文件可能被删
+        // （或并发媒体请求耗尽 fd），流错误若无监听会变成 uncaughtException
+        // 打崩整个宿主进程。这里把 stat 包进 try/catch、给流挂 error 监听，
+        // 出错只销毁响应连接，绝不让异常冒泡到进程级。
+        let stat
+        try {
+          stat = statSync(validated.path)
+        } catch (error) {
+          sendJson(res, 200, { ok: false, path: validated.path, error: `无法读取文件：${error instanceof Error ? error.message : String(error)}` })
+          return
+        }
         const contentType = contentTypeFor(validated.path)
         const range = req.headers.range
         // Single-range support (browsers ask for one range for media seeking).
@@ -546,7 +573,9 @@ export function apply(ctx) {
               'cache-control': 'no-store',
             })
             if (req.method === 'HEAD') { res.end(); return }
-            createReadStream(validated.path, { start, end }).pipe(res)
+            createReadStream(validated.path, { start, end })
+              .on('error', () => { res.destroy() })
+              .pipe(res)
             return
           }
           res.writeHead(416, {
@@ -563,7 +592,9 @@ export function apply(ctx) {
           'cache-control': 'no-store',
         })
         if (req.method === 'HEAD') { res.end(); return }
-        createReadStream(validated.path).pipe(res)
+        createReadStream(validated.path)
+          .on('error', () => { res.destroy() })
+          .pipe(res)
       },
     })
     const offGit = ctx.webServer.register({

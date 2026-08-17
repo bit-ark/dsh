@@ -82,8 +82,10 @@ function foldSessionUsage(header, events) {
     if (index < seed) continue;
     const sample = sampleOf(event);
     if (sample === void 0) continue;
+    const time = typeof event.time === "number" && Number.isFinite(event.time) ? event.time : 0;
+    if (time <= 0) continue;
     byStep.set(`${sample.turn}:${sample.step}`, {
-      time: typeof event.time === "number" && Number.isFinite(event.time) ? event.time : 0,
+      time,
       provider: currentProvider,
       model: currentModel,
       buckets: bucketsFrom(sample.usage)
@@ -126,7 +128,8 @@ function buildDayBuckets(samples, days, nowMs, prices, peakHours = DEFAULT_PEAK_
       cacheWrite: 0,
       total: 0,
       requests: 0,
-      cost: 0
+      cost: 0,
+      priced: false
     };
     buckets.push(bucket);
     byKey.set(date, bucket);
@@ -142,7 +145,10 @@ function buildDayBuckets(samples, days, nowMs, prices, peakHours = DEFAULT_PEAK_
     bucket.cacheWrite += sample.buckets.cacheWrite;
     bucket.requests += 1;
     const cost = costOfSample(sample, prices, peakHours);
-    if (cost !== void 0) bucket.cost += cost;
+    if (cost !== void 0) {
+      bucket.cost += cost;
+      bucket.priced = true;
+    }
   }
   for (const bucket of buckets) bucket.total = totalOf(bucket);
   return buckets;
@@ -329,7 +335,6 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
   let skipped = 0;
   let allTimeTotal = 0;
   let allTimeRequests = 0;
-  let pricedSamples = 0;
   let cursor = 0;
   const worker = async () => {
     for (; ; ) {
@@ -341,6 +346,8 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
         const inspection = await persistence.load(header.id);
         const fold = foldSessionUsage(
           { id: header.id, cwd: header.cwd, seedLength: header.seedLength },
+          // persistence.load 的事件是运行时域对象数组，这里只按最小形状
+          // （type/time/data）消费，用双断言避免类型系统纠缠。
           inspection.events
         );
         allSamples.push(...fold.samples);
@@ -365,6 +372,7 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
   const windowBuckets = zeroBuckets();
   let windowRequests = 0;
   let windowCost = 0;
+  let windowPriced = false;
   for (const bucket of dayBuckets) {
     windowBuckets.uncachedInput += bucket.uncachedInput;
     windowBuckets.output += bucket.output;
@@ -372,6 +380,7 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
     windowBuckets.cacheWrite += bucket.cacheWrite;
     windowRequests += bucket.requests;
     windowCost += bucket.cost;
+    if (bucket.priced) windowPriced = true;
   }
   const allTimeCostRaw = sumCost(allSamples, resolved.prices, resolved.peakHours);
   const allTimeCost = allTimeCostRaw === void 0 ? null : roundCost(allTimeCostRaw);
@@ -388,7 +397,6 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
     if (sampleCost !== void 0) {
       entry.cost += sampleCost;
       entry.priced = true;
-      pricedSamples += 1;
     }
     entry.providers.add(sample.provider);
     entry.total += totalOf(sample.buckets);
@@ -429,7 +437,7 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
     totals: {
       ...windowBuckets,
       total: totalOf(windowBuckets),
-      cost: pricedSamples > 0 ? roundCost(windowCost) : null
+      cost: windowPriced ? roundCost(windowCost) : null
     },
     allTimeTotal,
     allTimeRequests,
@@ -447,22 +455,25 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
 function apply(ctx, config) {
   const resolved = resolveConfig(config);
   let usageCache = null;
-  let usageInflight = null;
+  const usageInflight = /* @__PURE__ */ new Map();
   const getUsage = async (days, refresh) => {
     if (!refresh && usageCache !== null && usageCache.days === days && Date.now() - usageCache.at < resolved.cacheTtlMs) {
       return { ...usageCache.result, cached: true };
     }
-    if (usageInflight === null) {
-      usageInflight = computeUsage(ctx, ctx.sessionPersistence, days, config, resolved).then((result) => {
+    const key = `${days}:${refresh ? "1" : "0"}`;
+    let inflight = usageInflight.get(key);
+    if (inflight === void 0) {
+      inflight = computeUsage(ctx, ctx.sessionPersistence, days, config, resolved).then((result) => {
         usageCache = { at: Date.now(), days, result };
-        usageInflight = null;
+        usageInflight.delete(key);
         return result;
       }).catch((error) => {
-        usageInflight = null;
+        usageInflight.delete(key);
         throw error;
       });
+      usageInflight.set(key, inflight);
     }
-    return usageInflight;
+    return inflight;
   };
   const handler = async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");

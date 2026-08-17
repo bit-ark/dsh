@@ -34,6 +34,9 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 
 export const inject = ['slots', 'sessions', 'workspaces']
 
+/** 批量删除单次请求的 id 上限（宿主硬上限 500；取 200 留余量且进度可感知）。 */
+const DELETE_BATCH_SIZE = 200
+
 /** 线上数据形状（宿主域对象的纯 JSON 投影）。 */
 interface WorkspaceRow {
   workspaceId: string
@@ -125,6 +128,8 @@ type DownloadStatus = 'downloading' | 'success' | 'error'
 interface DownloadEntry { status: DownloadStatus; error?: string }
 const downloadStates: Record<string, DownloadEntry> = {}
 const downloadListeners = new Set<() => void>()
+/** 在途下载的 sessionId 集合：同步拦截同一会话的重复点击（按钮禁用要等渲染）。 */
+const downloadInflight = new Set<string>()
 
 /**
  * 供 useSyncExternalStore 使用的缓存快照。包装层必须保持引用稳定：
@@ -133,14 +138,17 @@ const downloadListeners = new Set<() => void>()
  * 真正变化时才替换快照。
  */
 let downloadsSnapshot: { bySession: Record<string, DownloadEntry> } = { bySession: {} }
+/** 订阅下载状态变化；返回取消订阅函数（useSyncExternalStore 契约）。 */
 function subscribeDownloads(listener: () => void): () => void {
   downloadListeners.add(listener)
   return () => { downloadListeners.delete(listener) }
 }
+/** 广播快照变更：重建快照对象并逐个通知订阅者。 */
 function emitDownloads(): void {
   downloadsSnapshot = { bySession: { ...downloadStates } }
   for (const listener of downloadListeners) listener()
 }
+/** 当前快照（引用稳定，仅在 emitDownloads 时替换）。 */
 function getDownloadsSnapshot(): { bySession: Record<string, DownloadEntry> } {
   return downloadsSnapshot
 }
@@ -167,8 +175,12 @@ function exportUrl(sessionId: string): string {
 /**
  * 把一个归档会话的日志作为 ZIP 通过浏览器下载管理器导出。
  * 先 HEAD 探测可用性，再用 <a download> 触发 GET 下载；状态写入私有 store。
+ * downloadInflight 做同步去重：同一会话的第二次点击（渲染禁用生效前）
+ * 直接忽略，避免双发 HEAD+GET。
  */
 async function downloadSessionLog(sessionId: string): Promise<void> {
+  if (downloadInflight.has(sessionId)) return
+  downloadInflight.add(sessionId)
   downloadStates[sessionId] = { status: 'downloading' }
   emitDownloads()
   try {
@@ -184,8 +196,26 @@ async function downloadSessionLog(sessionId: string): Promise<void> {
       status: 'error',
       error: error instanceof Error ? error.message : String(error),
     }
+  } finally {
+    downloadInflight.delete(sessionId)
   }
   emitDownloads()
+}
+
+/**
+ * 清理已不存在会话的下载状态：行消失（会话被删 / 移出项目）后，残留的
+ * success/error 条目会在会话 id 将来复用时错误地重新出现；面板关闭时统一
+ * 修剪一次（模块级 store 长驻，只靠新增覆盖会无限膨胀）。
+ */
+function pruneDownloads(activeIds: ReadonlySet<string>): void {
+  let changed = false
+  for (const id of Object.keys(downloadStates)) {
+    if (!activeIds.has(id)) {
+      delete downloadStates[id]
+      changed = true
+    }
+  }
+  if (changed) emitDownloads()
 }
 
 export function apply(ctx: any): void {
@@ -458,6 +488,11 @@ export function apply(ctx: any): void {
     const [notice, setNotice] = useState<string | null>(null)
     const panelRef = useRef<HTMLDivElement | null>(null)
     const triggerRef = useRef<HTMLButtonElement | null>(null)
+    // 同步在途守卫：setBusy 要等下一次渲染才禁用按钮，同一 tick 里的第二次
+    // 点击会重新进入 run/deleteAll（React 18 批处理）——用 ref 在进入时
+    // 立即拦截，杜绝双击双发（批量删除会双计数、下载会双发 HEAD+GET）。
+    const busyRef = useRef(false)
+    const batchBusyRef = useRef(false)
 
     // 不依赖打开会话解析当前项目：最近活跃 workspace → 持有当前会话的
     // workspace → 当前会话 cwd 对应的 workspace。
@@ -503,6 +538,12 @@ export function apply(ctx: any): void {
       return result
     }, [workspaces, sessions, workspace])
 
+    // 会话列表变化时修剪下载状态：已不在当前项目里的会话（被删/移出）的
+    // 残留 success/error 条目清掉，避免状态无限堆积或 id 复用时误显示。
+    useEffect(() => {
+      pruneDownloads(new Set(rows.map(row => row.id)))
+    }, [rows])
+
     // Escape 关闭；点击面板与触发按钮之外的区域关闭。
     // （触发按钮被排除在外，让点击事件自己负责开关——否则 mousedown 关闭后
     // 紧接的 click 切换会立刻重新打开。）
@@ -535,73 +576,95 @@ export function apply(ctx: any): void {
 
     /** 执行恢复 / 删除；失败把可读错误写入面板。 */
     const run = async (action: 'restore' | 'delete', id: string): Promise<void> => {
+      if (busyRef.current) return
+      busyRef.current = true
       setError(null)
       setNotice(null)
       setBusy({ id, action })
       try {
         await callHost(action, { sessionId: id })
-        if (action === 'delete') {
-          // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
-          // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
-          ctx.sessions.refresh?.()
-          ctx.workspaces.refresh?.()
-        }
+        // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
+        // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
+        // 恢复也刷新 workspaces：虽然宿主写链会广播 archived-sessions-changed
+        // 驱动实时刷新，但那依赖 harness 内部事件，这里主动刷新兜底。
+        ctx.sessions.refresh?.().catch?.(() => {})
+        ctx.workspaces.refresh?.().catch?.(() => {})
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
+        busyRef.current = false
         setBusy(null)
       }
     }
 
+    /** 恢复单个归档会话（回到侧边栏原位置）。 */
     const restore = (id: string): void => { void run('restore', id) }
+    /** 硬删除单个归档会话（含二次确认，确认文案说明不可恢复）。 */
     const remove = (id: string, title: string): void => {
       const confirmed = window.confirm(
         `确定要永久删除会话「${title}」吗？\n\n这是硬删除：会话的所有文件都会被删除，无法恢复。`,
       )
       if (confirmed) void run('delete', id)
     }
-    /** 一键删除：把当前项目全部已归档会话一次性硬删除。 */
+    /**
+     * 一键删除：把当前项目全部已归档会话一次性硬删除。
+     * 宿主单次上限 500 个 id（超限整批 400），这里按 200/批分片串行，
+     * 保证归档数 >500 的项目也能整批删完而非整批失败。
+     */
     const deleteAll = (): void => {
       if (rows.length === 0) return
       const confirmed = window.confirm(
         `确定要一键删除全部 ${rows.length} 个已归档会话吗？\n\n这是硬删除：每个会话的所有文件都会被删除，无法恢复。\n运行中的会话会被跳过。`,
       )
       if (!confirmed) return
+      if (batchBusyRef.current) return
+      batchBusyRef.current = true
       setError(null)
       setNotice(null)
       setBatchBusy(true)
       void (async () => {
         try {
-          const payload = await callHost('delete-all', { sessionIds: rows.map(row => row.id) }) as {
-            total?: number
-            deleted?: number
-            skipped?: number
-            failed?: number
-            failures?: Array<{ sessionId: string; error: string }>
+          const ids = rows.map(row => row.id)
+          const total = ids.length
+          let deleted = 0
+          let skipped = 0
+          let failed = 0
+          const failures: Array<{ sessionId: string; error: string }> = []
+          for (let offset = 0; offset < ids.length; offset += DELETE_BATCH_SIZE) {
+            const payload = await callHost('delete-all', { sessionIds: ids.slice(offset, offset + DELETE_BATCH_SIZE) }) as {
+              total?: number
+              deleted?: number
+              skipped?: number
+              failed?: number
+              failures?: Array<{ sessionId: string; error: string }>
+            }
+            deleted += payload.deleted ?? 0
+            skipped += payload.skipped ?? 0
+            failed += payload.failed ?? 0
+            const chunkFailures = payload.failures
+            if (chunkFailures !== undefined && chunkFailures.length > 0) failures.push(...chunkFailures)
           }
-          const deleted = payload.deleted ?? 0
-          const skipped = payload.skipped ?? 0
-          const failed = payload.failed ?? 0
           const parts: string[] = [`已删除 ${deleted} 个`]
           if (skipped > 0) parts.push(`跳过运行中 ${skipped} 个`)
           if (failed > 0) parts.push(`失败 ${failed} 个`)
           let message = parts.join('，')
-          const failures = payload.failures
-          if (failures !== undefined && failures.length > 0) {
+          if (failures.length > 0) {
             message += `：${failures.map(item => `${item.sessionId}（${item.error}）`).join('；')}`
           }
           setNotice(message)
           // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
           // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
-          ctx.sessions.refresh?.()
-          ctx.workspaces.refresh?.()
+          ctx.sessions.refresh?.().catch?.(() => {})
+          ctx.workspaces.refresh?.().catch?.(() => {})
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err))
         } finally {
+          batchBusyRef.current = false
           setBatchBusy(false)
         }
       })()
     }
+    /** 打开会话（从面板切到会话区）；失败通常是因为列表刷新中行已消失。 */
     const openSession = (id: string): void => {
       try {
         ctx.sessions.open(id)

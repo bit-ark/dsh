@@ -93,7 +93,11 @@ window.__ModuleLoader__.load({
 		/** 拉取状态（force=true 走 recheck，绕过宿主 60s 缓存）。 */
 		function statusFetch(force) {
 			const path = force ? "/updater/recheck" : "/updater/status";
-			const init = force ? { method: "POST" } : undefined;
+			// recheck 是 POST：必须带 application/json 头（宿主 415 围栏只认
+			// 该媒体类型，与其余插件一致）。
+			const init = force
+				? { method: "POST", headers: { "content-type": "application/json" } }
+				: undefined;
 			return fetch(path, init).then((res) => {
 				if (!res.ok) throw new Error("http " + res.status);
 				return res.json();

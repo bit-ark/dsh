@@ -105,6 +105,8 @@ window.__ModuleLoader__.load({
 		let toast = null;
 		let toastSeq = 0;
 		const listeners = new Set();
+		/** 托盘保留的通知上限：超过则丢弃最旧的（防长驻页面无限堆积）。 */
+		const NOTIFICATIONS_CAP = 50;
 
 		/** 订阅 store 变化；返回退订函数。 */
 		function subscribe(listener) {
@@ -139,7 +141,7 @@ window.__ModuleLoader__.load({
 		/**
 		 * 服务入口：发布一条通知（toast + 铃铛/托盘）。
 		 * input 形如 { id, title, body?, tone?, onClick? }；id 必填非空，其余容错。
-		 * 同 id 重复发布 = 更新该条（去重后置顶）。
+		 * 同 id 重复发布 = 更新该条（去重后追加到数组末尾，即托盘底部最新）。
 		 */
 		function notify(input) {
 			const entry = input || {};
@@ -153,6 +155,9 @@ window.__ModuleLoader__.load({
 			};
 			notifications = notifications.filter(n => n.id !== item.id);
 			notifications = [...notifications, item];
+			if (notifications.length > NOTIFICATIONS_CAP) {
+				notifications = notifications.slice(notifications.length - NOTIFICATIONS_CAP);
+			}
 			emit();
 			showToastOnce(item);
 		}

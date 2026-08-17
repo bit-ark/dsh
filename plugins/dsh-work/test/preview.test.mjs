@@ -106,6 +106,20 @@ test('renderMarkdown 链接只放行 http(s)/mailto，其余原样转义', () =>
   assert.ok(unsafe.includes('javascript:alert(1)'), 'unsafe link stays as escaped literal text')
 })
 
+test('renderMarkdown 属性注入被转义：href/src 里的引号逃逸不得产生新元素（XSS 回归）', () => {
+  // 白名单放行 https: 后，URL 里仍可带 `">` 逃逸属性——这是存储型 XSS
+  // 的注入点（在应用同源 DOM 生成 <img onerror>）。属性值必须再经转义，
+  // 使整段 URL 停留在 href 属性内，浏览器读属性时再把 &quot; 解码回引号。
+  const link = renderMarkdown('[x](https://a.com/"><img src=x onerror=alert(1)>)', '/w/app')
+  assert.ok(!link.includes('href="https://a.com/"><img'), '注入的 <img> 不得逃逸出 href 属性')
+  assert.ok(link.includes('&quot;&gt;&lt;img'), '引号/尖括号必须以实体形式留在属性值里')
+  const image = renderMarkdown('![a](https://a.com/"><img src=x onerror=alert(1)>)', '/w/app')
+  assert.ok(!image.includes('src="https://a.com/"><img'), 'img src 同样不得被逃逸')
+  // 正常链接不受影响（& 转义后浏览器解码回原值）。
+  const normal = renderMarkdown('[x](https://a.com/?a=1&b=2)', '/w/app')
+  assert.match(normal, /href="https:\/\/a\.com\/\?a=1&amp;b=2"/)
+})
+
 test('renderMarkdown 图片：http(s) 直连、同树相对路径走 asset 路由、父目录拒绝', () => {
   const direct = renderMarkdown('![a](https://example.com/i.png)', '/w/app')
   assert.match(direct, /<img src="https:\/\/example\.com\/i\.png" alt="a">/)

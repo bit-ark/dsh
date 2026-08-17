@@ -72,9 +72,13 @@ window.__ModuleLoader__.load({
 				const [busy, setBusy] = useState(false);
 				const [notice, setNotice] = useState(null);
 				const resetTimer = useRef(null);
+				// 重启看门狗：重启成功返回后，若页面在预期窗口内仍存活（说明
+				// 助手脚本悄悄失败、服务没真正重启），复位 busy 并提示，避免
+				// 按钮永远卡在「重启中…」。
+				const watchdogTimer = useRef(null);
 				const getNotifier = useCallback(() => ctx.get("notifier"), []);
 
-				// 加载服务状态 + 卸载时清理复位定时器。
+				// 加载服务状态 + 卸载时清理复位/看门狗定时器。
 				useEffect(() => {
 					fetch("/service/status")
 						.then((response) => response.json())
@@ -94,6 +98,7 @@ window.__ModuleLoader__.load({
 						});
 					return () => {
 						if (resetTimer.current !== null) clearTimeout(resetTimer.current);
+						if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
 					};
 				}, []);
 
@@ -130,6 +135,16 @@ window.__ModuleLoader__.load({
 								setNotice(message);
 								notify({ id: "dsh-restart", title: message, tone: "info" });
 								// 保持 busy：页面即将随服务重启离线。
+								// 但若助手脚本静默失败（osascript 被拒 / 端口未
+								// 释放等），页面不会离线——90s 看门狗到期后若
+								// 本页仍在运行就复位并提示，绝不永久卡死。
+								if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
+								watchdogTimer.current = setTimeout(() => {
+									watchdogTimer.current = null;
+									setBusy(false);
+									setStatusError("重启似乎未生效：服务可能仍在运行或重启脚本失败，请查看 ~/.dsh/restart.log");
+									notify({ id: "dsh-restart-error", title: "重启未生效，请查看日志", tone: "error" });
+								}, 90000);
 							} else {
 								const error = payload !== null && typeof payload === "object" && typeof payload.error === "string"
 									? payload.error

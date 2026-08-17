@@ -19,9 +19,12 @@
  *      seed 前缀被跳过，避免继承历史被重复计数。结果在内存缓存 `cacheTtlMs`
  *      毫秒；`refresh=1` 强制重算。
  *
- * 性能说明：聚合是单遍的——工作线程内对每个会话做 fold 的同时增量累加全量
- * 合计（allTime），窗口合计直接由 buildDayBuckets 的日桶求和得出，不再对全部
- * 样本做第二次遍历与重复的日期计算。缓存 5 分钟 + 在途请求去重。
+ * 性能说明：样本在内存里只保留一份（每个 LLM step 一个最终样本），聚合分
+ * 三趟——buildDayBuckets 分桶（含窗口内费用）、sumCost 算全量费用、perKey
+ * 按 key 聚合；对同一份样本重复遍历是 O(n)，不是 O(n²)，且窗口合计直接由
+ * 日桶求和、全量合计在 worker 内增量累加。缓存 5 分钟 + 在途请求按
+ * (days, refresh) 键控去重。会话极多时首查需全量解压日志，属预期（README
+ * 已注明）。
  *
  * 本插件全程只读：不写会话 / 设置 / 磁盘，无定时器（缓存只是时间戳比较）。
  */
@@ -168,16 +171,22 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
-/**
- * 归一化行配置：非法值回退默认，days 钳到 1..90，
- * balanceBaseURL 做一次 URL 解析（解析失败保持官方默认，拼写错误不能炸掉整行）。
- */
-function resolveConfig(config: Config | undefined): {
+/** 归一化后的行配置（resolveConfig 的返回值，供各消费方类型化使用）。 */
+interface ResolvedConfig {
   apiKeyEnv: string
   balanceBaseURL: string
   usageDays: number
   cacheTtlMs: number
-} {
+  costCurrency: 'CNY' | 'USD'
+  prices: PriceTable
+  peakHours: number[]
+}
+
+/**
+ * 归一化行配置：非法值回退默认，days 钳到 1..90，
+ * balanceBaseURL 做一次 URL 解析（解析失败保持官方默认，拼写错误不能炸掉整行）。
+ */
+function resolveConfig(config: Config | undefined): ResolvedConfig {
   let usageDays = DEFAULT_USAGE_DAYS
   if (typeof config?.usageDays === 'number' && Number.isFinite(config.usageDays)) {
     usageDays = Math.max(1, Math.min(MAX_USAGE_DAYS, Math.trunc(config.usageDays)))
@@ -392,7 +401,7 @@ async function computeUsage(
   persistence: SessionPersistenceLike,
   days: number,
   config: Config | undefined,
-  resolved: ReturnType<typeof resolveConfig>,
+  resolved: ResolvedConfig,
 ): Promise<UsageResult> {
   const headers = await persistence.list()
   const allSamples: UsageSample[] = []
@@ -401,7 +410,6 @@ async function computeUsage(
   let skipped = 0
   let allTimeTotal = 0
   let allTimeRequests = 0
-  let pricedSamples = 0
 
   // 有界并发映射：cursor 原子递增分配任务给固定数量的 worker。
   let cursor = 0
@@ -415,7 +423,9 @@ async function computeUsage(
         const inspection = await persistence.load(header.id)
         const fold = foldSessionUsage(
           { id: header.id, cwd: header.cwd, seedLength: header.seedLength },
-          inspection.events as never,
+          // persistence.load 的事件是运行时域对象数组，这里只按最小形状
+          // （type/time/data）消费，用双断言避免类型系统纠缠。
+          inspection.events as unknown as readonly never[],
         )
         allSamples.push(...fold.samples)
         allTimeTotal += totalOf(fold.totals)
@@ -443,6 +453,10 @@ async function computeUsage(
   const windowBuckets = zeroBuckets()
   let windowRequests = 0
   let windowCost = 0
+  // 窗口内是否存在可计价样本：不能拿全量的 pricedSamples 判定（那是所有
+  // 历史样本的计数，窗口内若只有未配置价格的模型，会误把 0 元显示成 ¥0.00
+  // 而不是「—」）。
+  let windowPriced = false
   for (const bucket of dayBuckets) {
     windowBuckets.uncachedInput += bucket.uncachedInput
     windowBuckets.output += bucket.output
@@ -450,6 +464,7 @@ async function computeUsage(
     windowBuckets.cacheWrite += bucket.cacheWrite
     windowRequests += bucket.requests
     windowCost += bucket.cost
+    if (bucket.priced) windowPriced = true
   }
 
   // 全量费用（含窗口外历史）：没有任何可计价样本时为 null（未配置价格）。
@@ -482,7 +497,6 @@ async function computeUsage(
     if (sampleCost !== undefined) {
       entry.cost += sampleCost
       entry.priced = true
-      pricedSamples += 1
     }
     entry.providers.add(sample.provider)
     entry.total += totalOf(sample.buckets)
@@ -530,7 +544,7 @@ async function computeUsage(
     totals: {
       ...windowBuckets,
       total: totalOf(windowBuckets),
-      cost: pricedSamples > 0 ? roundCost(windowCost) : null,
+      cost: windowPriced ? roundCost(windowCost) : null,
     },
     allTimeTotal,
     allTimeRequests,
@@ -549,11 +563,14 @@ async function computeUsage(
 export function apply(ctx: any, config: Config | undefined): void {
   const resolved = resolveConfig(config)
   let usageCache: { at: number; days: number; result: UsageResult } | null = null
-  let usageInflight: Promise<UsageResult> | null = null
+  // 在途计算按 `${days}:${refresh}` 键控去重：不同窗口的并发请求各算各的，
+  // refresh=1 不会被同键的在途普通请求吞掉（旧实现是单一 Promise 槽，
+  // 后到的 days=30 请求会拿到 days=14 的中间结果）。
+  const usageInflight = new Map<string, Promise<UsageResult>>()
 
   /**
    * 取用量结果：缓存命中（同 days 且未过期）直接返回并标记 cached；
-   * 未命中时合并并发请求（usageInflight 去重），完成后回填缓存。
+   * 未命中时合并同键并发请求，完成后回填缓存。
    */
   const getUsage = async (days: number, refresh: boolean): Promise<UsageResult> => {
     if (!refresh
@@ -562,19 +579,22 @@ export function apply(ctx: any, config: Config | undefined): void {
       && Date.now() - usageCache.at < resolved.cacheTtlMs) {
       return { ...usageCache.result, cached: true }
     }
-    if (usageInflight === null) {
-      usageInflight = computeUsage(ctx, ctx.sessionPersistence as SessionPersistenceLike, days, config, resolved)
+    const key = `${days}:${refresh ? '1' : '0'}`
+    let inflight = usageInflight.get(key)
+    if (inflight === undefined) {
+      inflight = computeUsage(ctx, ctx.sessionPersistence as SessionPersistenceLike, days, config, resolved)
         .then((result) => {
           usageCache = { at: Date.now(), days, result }
-          usageInflight = null
+          usageInflight.delete(key)
           return result
         })
         .catch((error) => {
-          usageInflight = null
+          usageInflight.delete(key)
           throw error
         })
+      usageInflight.set(key, inflight)
     }
-    return usageInflight
+    return inflight
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

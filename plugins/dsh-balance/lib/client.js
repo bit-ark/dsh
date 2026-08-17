@@ -313,8 +313,11 @@ function BalanceSection(_props) {
   const [usageLoading, setUsageLoading] = (0, import_react.useState)(true);
   const lastBalanceFetchAt = (0, import_react.useRef)(0);
   const aliveRef = (0, import_react.useRef)(true);
-  (0, import_react.useEffect)(() => () => {
-    aliveRef.current = false;
+  (0, import_react.useEffect)(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
   }, []);
   const loadBalance = (0, import_react.useCallback)(async () => {
     setBalanceLoading(true);

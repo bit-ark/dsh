@@ -14,16 +14,24 @@ function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     req.on("data", (chunk) => {
+      if (settled) return;
       size += chunk.length;
       if (size > 1e6) {
-        reject(new HttpError(413, "request body too large"));
-        req.destroy();
+        fail(new HttpError(413, "request body too large"));
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       try {
         const text = Buffer.concat(chunks).toString("utf8");
         resolve(text === "" ? {} : JSON.parse(text));
@@ -31,7 +39,7 @@ function readJsonBody(req) {
         reject(new HttpError(400, "request body is not valid JSON"));
       }
     });
-    req.on("error", () => reject(new HttpError(400, "request stream failed")));
+    req.on("error", () => fail(new HttpError(400, "request stream failed")));
   });
 }
 function sendJson(res, status, value) {
@@ -97,6 +105,8 @@ function apply(ctx) {
     try {
       if (route === void 0) throw new HttpError(404, `unknown route ${JSON.stringify(pathname)}`);
       if (req.method !== "POST") throw new HttpError(405, "method not allowed; use POST");
+      const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
+      if (mediaType !== "application/json") throw new HttpError(415, "content type must be application/json");
       const body = await readJsonBody(req);
       if (route === "restore") {
         await handleRestore(ctx, requireSessionId(body), res);

@@ -410,8 +410,14 @@ function BalanceSection(_props: { close?: () => void }): any {
   const [usageLoading, setUsageLoading] = useState(true)
   const lastBalanceFetchAt = useRef(0)
   // 卸载保护：设置页关闭时忽略在途请求的过期 setState（避免写已卸载组件）。
+  // 注意 effect 体必须先把 aliveRef 置回 true——React StrictMode 会
+  // 挂载→清理→再挂载，若不重置，重挂载后所有在途结果都被丢弃、页面
+  // 永远停在「正在获取…」。
   const aliveRef = useRef(true)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
 
   const loadBalance = useCallback(async (): Promise<void> => {
     setBalanceLoading(true)
@@ -429,6 +435,7 @@ function BalanceSection(_props: { close?: () => void }): any {
     }
   }, [])
 
+  /** 一键跳转官方充值页（DeepSeek 无面向 API key 的充值接口，直达是唯一稳定路径）。 */
   const openTopUp = useCallback((): void => {
     window.open(TOP_UP_URL, '_blank', 'noopener')
   }, [])

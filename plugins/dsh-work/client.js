@@ -190,6 +190,7 @@ window.__ModuleLoader__.load({
 		function clampTreeWidth(width, panelWidth) {
 			return Math.min(Math.round(panelWidth * 0.6), Math.max(160, Math.round(width)));
 		}
+		/** 目录树节点构造：把宿主 /workbench/dir 的一行条目转成可展开的树节点。 */
 		function toNode(entry) {
 			const node = {
 				path: entry.path,
@@ -204,6 +205,7 @@ window.__ModuleLoader__.load({
 			if (entry.size !== undefined) node.size = entry.size;
 			return node;
 		}
+		/** 按绝对路径在树里找节点（深度优先，找不到返回 undefined）。 */
 		function findNode(node, path) {
 			if (node.path === path) return node;
 			for (let i = 0; i < node.children.length; i++) {
@@ -212,15 +214,23 @@ window.__ModuleLoader__.load({
 			}
 			return undefined;
 		}
+		/** 不可变更新：返回一棵沿 path 分支替换过的新树（未命中路径则原样返回）。 */
 		function patchNode(root, path, patch) {
 			if (root.path === path) return Object.assign({}, root, patch);
 			return Object.assign({}, root, { children: root.children.map((child) => patchNode(child, path, patch)) });
 		}
+		/** 变更徽标：porcelain 前两位的状态码 → 单字符徽标（? = 未跟踪）。 */
 		function badgeKind(code) {
 			const trimmed = code.trim();
 			if (trimmed === "" || trimmed === "??") return "?";
 			return trimmed.charAt(0);
 		}
+		/**
+		 * porcelain=v1 的 XY 状态：第一位是暂存区（index），第二位是工作区
+		 * （worktree）。`X` 非空格且非 `?` 表示有已暂存变更（`??` 未跟踪、
+		 * ` M` 仅工作区改动都算未暂存）。注意 UU（双方冲突）会被归入"已暂存"，
+		 * 点 unstage 会失败——这是低影响边缘情况，未单独处理。
+		 */
 		function stagedOf(code) {
 			const first = code.charAt(0);
 			return first !== " " && first !== "?";
@@ -575,6 +585,7 @@ window.__ModuleLoader__.load({
 			return out;
 		}
 
+		/** 高亮单个 HTML 标签（markup 语言专用扫描）：属性名/等号/字符串值着色。 */
 		function highlightTag(tag) {
 			let out = "";
 			let last = 0;
@@ -733,14 +744,18 @@ window.__ModuleLoader__.load({
 				else if (token.charAt(0) === "*") out += "<em>" + escapeHtml(token.slice(1, -1)) + "</em>";
 				else if (token.charAt(0) === "!") {
 					const href = mdImageHref(match[3], dir);
+					// href/src 是属性上下文：白名单只保证协议，值里仍可能含
+					// `"><img onerror=...>` 一类的引号逃逸——必须再经 escapeHtml
+					// 转义（& < > " '），否则会在应用同源 DOM 注入元素（存储型
+					// XSS）。浏览器读属性时会解码 &amp; 回 &，功能不受影响。
 					out += href === null
 						? escapeHtml(token)
-						: '<img src="' + href + '" alt="' + escapeHtml(match[2]) + '">';
+						: '<img src="' + escapeHtml(href) + '" alt="' + escapeHtml(match[2]) + '">';
 				} else {
 					const href = mdLinkHref(match[5]);
 					out += href === null
 						? escapeHtml(token)
-						: '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(match[4]) + "</a>";
+						: '<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(match[4]) + "</a>";
 				}
 				last = match.index + token.length;
 			}
@@ -1109,9 +1124,30 @@ window.__ModuleLoader__.load({
 			// A session/cwd switch invalidates the selected file's path.
 			useEffect(() => { setSelected(null); }, [path]);
 
-			// Persist the panel and tree widths (clamped) whenever they change.
-			useEffect(() => { writeStored(WIDTH_KEY, width); }, [width]);
-			useEffect(() => { writeStored(SPLIT_KEY, treeWidth); }, [treeWidth]);
+			// 持久化面板/分栏宽度（钳制后）。拖拽中 pointermove 会高频触发
+			// setWidth，直接每次写 localStorage 会有写入抖动——统一走 150ms
+			// trailing 防抖。定时器放 ref（函数体每次渲染重建，属性挂函数上
+			// 会被新实例覆盖、卸载清理拿不到最后一个），卸载时把最后值落盘。
+			const writeTimerRef = useRef(null);
+			const debouncedWrite = (key, value) => {
+				if (writeTimerRef.current !== null) clearTimeout(writeTimerRef.current);
+				writeTimerRef.current = setTimeout(() => {
+					writeTimerRef.current = null;
+					writeStored(key, value);
+				}, 150);
+			};
+			// 最新值镜像，供卸载清理时拿最终宽度落盘（闭包里的 width 会过期）。
+			const widthRef = useRef(width);
+			const treeWidthRef = useRef(treeWidth);
+			widthRef.current = width;
+			treeWidthRef.current = treeWidth;
+			useEffect(() => { debouncedWrite(WIDTH_KEY, width); }, [width]);
+			useEffect(() => { debouncedWrite(SPLIT_KEY, treeWidth); }, [treeWidth]);
+			useEffect(() => () => {
+				if (writeTimerRef.current !== null) clearTimeout(writeTimerRef.current);
+				writeStored(WIDTH_KEY, widthRef.current);
+				writeStored(SPLIT_KEY, treeWidthRef.current);
+			}, []);
 
 			// Live max bound = frame width − sidebar's rendered width (the panel
 			// may cover everything right of the sidebar, never the sidebar).
@@ -1167,6 +1203,8 @@ window.__ModuleLoader__.load({
 			const [pathText, setPathText] = useState(path || "");
 			useEffect(() => { setPathText(path || ""); }, [path]);
 
+			// 提交路径框：去空白后若与当前会话 cwd 不同才设置 override
+			//（相同则回落 undefined = 跟随会话 cwd，避免无意义的路径覆盖）。
 			const applyPath = () => {
 				const trimmed = pathText.trim();
 				setPathOverride(trimmed.length > 0 && trimmed !== cwd ? trimmed : undefined);
@@ -1255,6 +1293,31 @@ window.__ModuleLoader__.load({
 				return () => controller.abort();
 			}, [path, listDir]);
 
+			// 把宿主返回的 git 事实体归一化进面板状态。GET 与每次 POST 变更都
+			// 返回同构的 { ok, repo, branch, head, graph, changes, ignored }，
+			// 这里统一消费——变更后直接用响应更新，省掉一次多余的全量重查
+			// （每个 mutation 能省 4~6 次 git spawn）。
+			// 注意：仅 ignore/unignore 变更的响应带 ignored 列表（宿主按路由
+			// 决定是否跑 --ignored），其余变更响应 ignored 恒为 []——若用户正
+			// 在「显示忽略项」视图里做暂存/提交，会误清空忽略列表，因此当新
+			// 响应没有 ignored 数据时沿用上一次的列表。
+			const applyGitFacts = (body) => {
+				if (body.ok !== true) { setGit({ status: "error", error: body.error || "git 查询失败" }); return; }
+				if (body.repo === false) {
+					setGit(body.error === undefined ? { status: "not-repo" } : { status: "not-repo", error: body.error });
+					return;
+				}
+				const freshIgnored = body.ignored || [];
+				setGit((prev) => ({
+					status: "ready",
+					branch: body.branch || "",
+					head: body.head || "",
+					graph: body.graph || [],
+					changes: body.changes || [],
+					ignored: freshIgnored.length > 0 || prev.status !== "ready" ? freshIgnored : prev.ignored || [],
+				}));
+			};
+
 			const loadGitState = useCallback(async (target, signal, withIgnored) => {
 				setGit({ status: "loading" });
 				try {
@@ -1263,19 +1326,7 @@ window.__ModuleLoader__.load({
 					const response = await fetch("/workbench/git?cwd=" + encodeURIComponent(target) + ignoredParam, options);
 					if (!response.ok) { setGit({ status: "error", error: "git 查询失败（HTTP " + response.status + "）" }); return; }
 					const body = await response.json();
-					if (body.ok !== true) { setGit({ status: "error", error: body.error || "git 查询失败" }); return; }
-					if (body.repo === false) {
-						setGit(body.error === undefined ? { status: "not-repo" } : { status: "not-repo", error: body.error });
-						return;
-					}
-					setGit({
-						status: "ready",
-						branch: body.branch || "",
-						head: body.head || "",
-						graph: body.graph || [],
-						changes: body.changes || [],
-						ignored: body.ignored || [],
-					});
+					applyGitFacts(body);
 				} catch (error) {
 					if (signal !== undefined && error instanceof DOMException && error.name === "AbortError") return;
 					setGit({ status: "error", error: messageOf(error) });
@@ -1293,9 +1344,15 @@ window.__ModuleLoader__.load({
 				if (path === undefined || initializing) return;
 				setInitializing(true);
 				try {
-					const response = await fetch("/workbench/git/init?cwd=" + encodeURIComponent(path), { method: "POST" });
+					// init 无请求体，但仍需 application/json 头（宿主 415 围栏）。
+					const response = await fetch("/workbench/git/init?cwd=" + encodeURIComponent(path), {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+					});
 					const body = await response.json();
 					if (body.ok !== true) { setGit({ status: "error", error: body.error || "仓库创建失败" }); return; }
+					// init 返回 { ok, cwd, branch }（尚无提交，无 graph/status）；
+					// 走一次标准 GET 拿完整事实（含空仓库的 not-repo 归一）。
 					await loadGitState(path);
 				} catch (error) {
 					setGit({ status: "error", error: messageOf(error) });
@@ -1309,13 +1366,19 @@ window.__ModuleLoader__.load({
 				setMutating(true);
 				setActionError(undefined);
 				try {
-					const options = payload === undefined
-						? { method: "POST" }
-						: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
+					// 无请求体的变更（stage-all / commit 之外）也要带
+					// application/json 头（宿主 415 围栏只认该媒体类型）。
+					const options = {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+					};
 					const response = await fetch("/workbench/git/" + action + "?cwd=" + encodeURIComponent(path), options);
 					const body = await response.json();
 					if (body.ok !== true) { setActionError(body.error || "git 操作失败"); return false; }
-					await loadGitState(path, undefined, showIgnored);
+					// 宿主在每个变更成功后都返回 FRESH 事实（与 GET 同构），
+					// 直接消费即可，不再额外拉一轮（README 声称的一次往返）。
+					applyGitFacts(body);
 					return true;
 				} catch (error) {
 					setActionError(messageOf(error));
@@ -1334,9 +1397,14 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				setRoot(patchNode(root, dirPath, { loading: true }));
+				// 路径 epoch 守卫：在途列表返回时若面板已切到别的目录，根路径
+				// 会变——此时 patch 会落到新树上（同名路径可能被写入过期子项）。
+				// 用根 path 是否仍等于发起时的 dirPath 的祖先来判别并丢弃。
+				const rootPathAtToggle = root.path;
 				listDir(dirPath).then((listing) => {
 					setRoot((current) => {
 						if (current === null) return current;
+						if (current.path !== rootPathAtToggle) return current;
 						const patch = { loading: false, loaded: true, expanded: true };
 						if (listing.ok === true) {
 							if (listing.truncated !== undefined) patch.truncated = listing.truncated;
@@ -1347,7 +1415,10 @@ window.__ModuleLoader__.load({
 						return patchNode(current, dirPath, patch);
 					});
 				}).catch((error) => {
-					setRoot((current) => current === null ? current : patchNode(current, dirPath, { loading: false, error: messageOf(error) }));
+					setRoot((current) => {
+						if (current === null || current.path !== rootPathAtToggle) return current;
+						return patchNode(current, dirPath, { loading: false, error: messageOf(error) });
+					});
 				});
 			};
 
@@ -1369,10 +1440,12 @@ window.__ModuleLoader__.load({
 				} catch {
 					// Keep the stale subtree visible; the refresh is best-effort.
 				}
-				for (let i = 0; i < node.children.length; i++) {
-					const child = node.children[i];
-					if (child.loaded && child.expanded) await refreshNode(child);
-				}
+				// 已展开的子目录并行刷新（原先串行，N 层展开要多 N 个往返）。
+				await Promise.all(
+					node.children
+						.filter((child) => child.loaded && child.expanded)
+						.map((child) => refreshNode(child)),
+				);
 			};
 
 			const refresh = () => {

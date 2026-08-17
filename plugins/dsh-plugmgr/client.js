@@ -162,11 +162,14 @@ window.__ModuleLoader__.load({
 		}
 
 		// ── Host 调用：GET 无体、POST 带 JSON 体，统一收 { ok, ... } ───────
+		// POST 恒带 application/json 头：宿主 415 围栏只认该媒体类型
+		// （防跨站简单 POST），即使将来出现无体 POST 也不踩围栏。
 		async function callJson(path, body) {
+			const isPost = body !== undefined;
 			const response = await fetch(path, {
-				method: body === undefined ? "GET" : "POST",
-				headers: body === undefined ? undefined : { "content-type": "application/json" },
-				body: body === undefined ? undefined : JSON.stringify(body),
+				method: isPost ? "POST" : "GET",
+				headers: { "content-type": "application/json" },
+				body: isPost ? JSON.stringify(body) : undefined,
 			});
 			let payload;
 			try {

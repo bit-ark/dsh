@@ -59,6 +59,10 @@ function resolveConfig(config) {
  */
 export function buildHelperScript(cfg) {
   const delaySec = Math.max(1, Math.round(cfg.delayMs / 1000))
+  // cwd 以单引号包裹后嵌入 osascript 的 do script 字符串：路径含空格也能
+  // 正确 cd；路径本身含单引号时按 shell 规则 '\'' 转义。cwd 来自插件配置
+  // （管理员可信输入），这里只是防御路径含空格的常见场景。
+  const quotedCwd = "'" + String(cfg.cwd).replace(/'/g, `'\\''`) + "'"
   return `#!/bin/bash
 # dsh-restart helper（由 dsh-restart 插件生成，${new Date().toISOString()}）
 LOG="${cfg.logPath}"
@@ -72,17 +76,17 @@ TARGET_ID=""
 for wid in $(osascript -e 'tell application "Terminal" to get id of every window' 2>/dev/null | tr -d ','); do
   nm=$(osascript -e "tell application \\"Terminal\\" to get name of window id $wid" 2>/dev/null)
   case "$nm" in
-    *"pnpm dsh web"*|*"bin.ts web"*|*"node ◂"*) TARGET_ID="$wid"; echo "target window $wid: $nm" ;;
+    *"pnpm dsh web"*|*"bin.ts web"*|*"bin.js web"*|*"node ◂"*) TARGET_ID="$wid"; echo "target window $wid: $nm" ;;
   esac
 done
 
-# 2) 停服务：监听者（bin.ts web）+ 其 pnpm 包装父进程，等端口释放
+# 2) 停服务：监听者（bin.ts / bin.js web）+ 其 pnpm 包装父进程，等端口释放
 SERVERS=$(lsof -t -nP -iTCP:${cfg.port} -sTCP:LISTEN 2>/dev/null)
 echo "server(s) before kill: \${SERVERS:-none}"
 for pid in $SERVERS; do
   cmd=$(ps -p "$pid" -o command= 2>/dev/null)
   case "$cmd" in
-    *"bin.ts web"*)
+    *"bin.ts web"*|*"bin.js web"*)
       ppid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
       kill -TERM "$pid" 2>/dev/null && echo "TERM server $pid"
       if [ -n "$ppid" ] && ps -p "$ppid" >/dev/null 2>&1; then
@@ -107,7 +111,7 @@ fi
 # 3) 拉起：优先同终端窗口，其次新窗口，最后 nohup 无终端回退
 RESTARTED=0
 if [ -n "$TARGET_ID" ] && osascript -e "tell application \\"Terminal\\" to get name of window id $TARGET_ID" >/dev/null 2>&1; then
-  osascript -e "tell application \\"Terminal\\" to do script \\"cd ${cfg.cwd} && ${cfg.command}\\" in window id $TARGET_ID" 2>&1
+  osascript -e "tell application \\"Terminal\\" to do script \\"cd ${quotedCwd} && ${cfg.command}\\" in window id $TARGET_ID" 2>&1
   echo "do script in window $TARGET_ID exit=$?"
   RESTARTED=1
 fi
@@ -168,10 +172,11 @@ export function apply(ctx, config) {
     }
     req.setEncoding('utf8')
     req.on('data', (chunk) => {
+      if (settled) return
       data += chunk
       if (data.length > 64 * 1024) {
-        req.destroy()
         fail(new Error('请求体过大'))
+        return
       }
     })
     req.on('end', () => {
@@ -213,6 +218,14 @@ export function apply(ctx, config) {
         handler: async (req, res) => {
           if (req.method !== 'POST') {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          // CSRF 围栏：与 harness /api 面同款约定——只收 application/json。
+          // 否则恶意页面可用「简单请求」跨站盲发重启，把本地服务反复拉起
+          // 再掐断（DoS）；重启还会写 ~/.dsh/restart.log，同样不该被跨站触发。
+          const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+          if (mediaType !== 'application/json') {
+            sendJson(res, 415, { ok: false, error: 'content type must be application/json' })
             return
           }
           try {

@@ -6,7 +6,7 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 
 | 插件（目录 / 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
 |---|---|---|---|---|
-| `dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete | sidebar.footer.action（归档面板） |
+| `dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
 | `dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
 | `dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
 | `dsh-notify` | 0.1.0 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
@@ -21,13 +21,13 @@ dsh-plugins/
 ├── README.md                # 本文件：插件一览与使用总览
 ├── LICENSE                  # MIT
 └── plugins/
-    ├── dsh-archive/            # TypeScript，构建产物在 lib/
-    ├── dsh-balance/       # TypeScript，构建产物在 lib/，含测试
-    ├── dsh-plugmgr/   # 纯 JavaScript
-    ├── dsh-notify/               # 纯 JavaScript
-    ├── dsh-restart/              # 纯 JavaScript
-    ├── dsh-update/                # 纯 JavaScript
-    └── dsh-work/              # 纯 JavaScript，含测试
+    ├── dsh-archive/         # TypeScript，构建产物在 lib/
+    ├── dsh-balance/         # TypeScript，构建产物在 lib/，含测试
+    ├── dsh-plugmgr/         # 纯 JavaScript，含测试
+    ├── dsh-notify/          # 纯 JavaScript
+    ├── dsh-restart/         # 纯 JavaScript
+    ├── dsh-update/          # 纯 JavaScript
+    └── dsh-work/            # 纯 JavaScript，含测试
 ```
 
 每个插件是独立的 npm 包，彼此互不依赖，各自目录下带有自己的 README。
@@ -44,8 +44,8 @@ pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-<插件名>
 
 ## 构建与测试
 
-- TypeScript 插件（dsh-archive、dsh-balance）：`pnpm install` 后 `pnpm build` 生成 `lib/`（已随仓库提交，link: 安装开箱即用）；deepseek-balance 另可 `pnpm test` 跑纯折叠断言。
-- 纯 JS 插件（dsh-notify、dsh-update、dsh-plugmgr、dsh-work）：无需构建；dsh-work 另可 `pnpm test` 跑文件分类 / MIME 映射纯逻辑断言。
+- TypeScript 插件（dsh-archive、dsh-balance）：`pnpm install` 后 `pnpm build` 生成 `lib/`（已随仓库提交，link: 安装开箱即用）；dsh-balance 另可 `pnpm test` 跑纯折叠断言。
+- 纯 JS 插件（dsh-notify、dsh-update、dsh-plugmgr、dsh-work）：无需构建；dsh-plugmgr、dsh-work 另可 `pnpm test` 跑纯逻辑断言（spec 分类 / 文件分类与预览渲染）。
 
 ## 生效方式
 
@@ -64,6 +64,7 @@ pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-<插件名>
 - 只消费 harness 公开服务 / 插槽 / store；唯一对 harness 私有实现的触碰点是 dsh-archive 的「恢复」写链（特性探测 + 503 安全失败，见其 README）。
 - 样式一律使用主题 token（`--dsw-alias-*`），深浅主题自动适配。
 - 请求体均限流（64KB / 1MB），错误统一以 `{ ok:false, error }` 信封返回。
+- 所有 POST 路由只接受 `application/json`（415 围栏，与 harness /api 面同款约定，防跨站简单 POST CSRF）；POST 响应统一带 `{ ok, ... }` 信封。
 
 ## 许可证
 

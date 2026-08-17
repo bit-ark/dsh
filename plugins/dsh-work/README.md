@@ -17,8 +17,10 @@ Git 操作，并支持点击文件在面板内预览内容。
   整块预览 + 返回按钮。
 - **代码样式**：文本预览带内置语法高亮（无依赖 tokenizer，覆盖 ts/js/json/yaml/
   py/go/rust/java/cpp/cs/php/ruby/swift/kotlin/shell/sql/css/html/markdown 等；
-  颜色走壳的 `--shiki-token-*` 全局调色板，与代码块一致）。未知扩展名回退纯文本，
-  超 300KB 跳过 token 以保流畅。
+  颜色走壳的 `--shiki-token-*` 全局调色板，与代码块一致）。无扩展名的常见文本
+  文件（Makefile / Dockerfile / LICENSE 等）按「未知类型」处理，显示名称 + 大小
+  + 无法预览提示（不在文本预览范围）；已知文本扩展名但不在高亮语言表里的
+  回退纯文本，超 300KB 跳过 token 以保流畅。
 - **MD 解释器**：`.md`/`.markdown`/`.mdx` 文件打开即渲染（内置轻量 GFM 渲染器：
   标题/段落/代码围栏（带高亮）/列表/引用/分隔线/行内样式），预览头可切回「源码」。
   链接只放行 http(s)/mailto；图片允许 http(s) 直连与同树相对路径（走
@@ -57,7 +59,9 @@ test/preview.test.mjs  纯逻辑断言（高亮 token / markdown 渲染 / html �
   Content-Type），支持单区间 Range（206），供 `<img>/<audio>/<video>` 直连。
 - `GET /workbench/git?cwd=<abs>[&ignored=1]` → 仓库事实（分支/HEAD/提交图/变更/忽略）。
 - `POST /workbench/git/{init,stage,unstage,stage-all,commit,ignore,unignore}?cwd=<abs>`
-  → 变更操作，成功返回最新仓库事实（与 GET 同构）。
+  → 变更操作，成功返回最新仓库事实（与 GET 同构），客户端直接消费该响应
+  刷新面板（一次往返，不再额外重查）。POST 只接受 `application/json`
+  （415 围栏，防跨站简单 POST）。
 
 ## 安装（已完成则跳过）
 
@@ -90,6 +94,10 @@ pnpm test   # 纯逻辑断言：文件分类 / MIME 映射 / 文本-二进制判
 - 媒体直接走 `/workbench/asset` URL，不做 base64；超大视频依赖浏览器自身的
   流式播放与单区间 Range。
 - 路径信任级别与 `/workbench/dir` 一致：绝对路径 + NUL 校验，跟随符号链接。
+  ⚠️ **部署警告**：所有 `/workbench/*` 路由按设计信任本地绝对路径、无鉴权、
+  无项目根限定——任何能访问该端口的人都能读取任意文件并对任意目录执行
+  git 操作。仅适合本机/可信网络环境使用，切勿把服务暴露到公网或非 loopback
+  网卡（如 `host: 0.0.0.0` 且无防火墙）。
 - 高亮是轻量正则 tokenizer，精度低于 shiki：字符串/注释/关键字/类型/调用等
   常规结构可靠，极端语法（嵌套模板、多行字符串变体）可能着色不完整；超 300KB
   的文本跳过 token 只做纯文本。

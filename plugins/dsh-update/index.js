@@ -198,6 +198,14 @@ export function apply(ctx, config) {
           sendJson(res, 405, { error: 'method not allowed' })
           return
         }
+        // CSRF 围栏：与 harness /api 面同款约定——只收 application/json。
+        // recheck 虽只读，但会触发一次远端检查（网络请求），不该被跨站
+        // 简单 POST 盲发；与其余插件保持一致。
+        const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+        if (mediaType !== 'application/json') {
+          sendJson(res, 415, { error: 'content type must be application/json' })
+          return
+        }
         sendJson(res, 200, await getStatus(true))
       },
     })

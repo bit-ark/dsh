@@ -28,6 +28,7 @@ module.exports = __toCommonJS(index_exports);
 var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
 var inject = ["slots", "sessions", "workspaces"];
+var DELETE_BATCH_SIZE = 200;
 async function callHost(endpoint, body) {
   const response = await fetch(`/dsh-archive/${endpoint}`, {
     method: "POST",
@@ -76,6 +77,7 @@ function ArchiveIcon({ size }) {
 }
 var downloadStates = {};
 var downloadListeners = /* @__PURE__ */ new Set();
+var downloadInflight = /* @__PURE__ */ new Set();
 var downloadsSnapshot = { bySession: {} };
 function subscribeDownloads(listener) {
   downloadListeners.add(listener);
@@ -104,6 +106,8 @@ function exportUrl(sessionId) {
   return url.toString();
 }
 async function downloadSessionLog(sessionId) {
+  if (downloadInflight.has(sessionId)) return;
+  downloadInflight.add(sessionId);
   downloadStates[sessionId] = { status: "downloading" };
   emitDownloads();
   try {
@@ -119,8 +123,20 @@ async function downloadSessionLog(sessionId) {
       status: "error",
       error: error instanceof Error ? error.message : String(error)
     };
+  } finally {
+    downloadInflight.delete(sessionId);
   }
   emitDownloads();
+}
+function pruneDownloads(activeIds) {
+  let changed = false;
+  for (const id of Object.keys(downloadStates)) {
+    if (!activeIds.has(id)) {
+      delete downloadStates[id];
+      changed = true;
+    }
+  }
+  if (changed) emitDownloads();
 }
 function apply(ctx) {
   const STYLE_ID = "dsh-archive-style";
@@ -386,6 +402,8 @@ function apply(ctx) {
     const [notice, setNotice] = (0, import_react.useState)(null);
     const panelRef = (0, import_react.useRef)(null);
     const triggerRef = (0, import_react.useRef)(null);
+    const busyRef = (0, import_react.useRef)(false);
+    const batchBusyRef = (0, import_react.useRef)(false);
     const workspace = (0, import_react.useMemo)(() => {
       const items = workspaces?.items;
       if (items === void 0 || items.length === 0) return void 0;
@@ -425,6 +443,9 @@ function apply(ctx) {
       return result;
     }, [workspaces, sessions, workspace]);
     (0, import_react.useEffect)(() => {
+      pruneDownloads(new Set(rows.map((row) => row.id)));
+    }, [rows]);
+    (0, import_react.useEffect)(() => {
       if (!open) return;
       const onKey = (event) => {
         if (event.key === "Escape") setOpen(false);
@@ -448,18 +469,21 @@ function apply(ctx) {
       () => getDownloadsSnapshot()
     );
     const run = async (action, id) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
       setError(null);
       setNotice(null);
       setBusy({ id, action });
       try {
         await callHost(action, { sessionId: id });
-        if (action === "delete") {
-          ctx.sessions.refresh?.();
-          ctx.workspaces.refresh?.();
-        }
+        ctx.sessions.refresh?.().catch?.(() => {
+        });
+        ctx.workspaces.refresh?.().catch?.(() => {
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
+        busyRef.current = false;
         setBusy(null);
       }
     };
@@ -483,29 +507,43 @@ function apply(ctx) {
 \u8FD0\u884C\u4E2D\u7684\u4F1A\u8BDD\u4F1A\u88AB\u8DF3\u8FC7\u3002`
       );
       if (!confirmed) return;
+      if (batchBusyRef.current) return;
+      batchBusyRef.current = true;
       setError(null);
       setNotice(null);
       setBatchBusy(true);
       void (async () => {
         try {
-          const payload = await callHost("delete-all", { sessionIds: rows.map((row) => row.id) });
-          const deleted = payload.deleted ?? 0;
-          const skipped = payload.skipped ?? 0;
-          const failed = payload.failed ?? 0;
+          const ids = rows.map((row) => row.id);
+          const total = ids.length;
+          let deleted = 0;
+          let skipped = 0;
+          let failed = 0;
+          const failures = [];
+          for (let offset = 0; offset < ids.length; offset += DELETE_BATCH_SIZE) {
+            const payload = await callHost("delete-all", { sessionIds: ids.slice(offset, offset + DELETE_BATCH_SIZE) });
+            deleted += payload.deleted ?? 0;
+            skipped += payload.skipped ?? 0;
+            failed += payload.failed ?? 0;
+            const chunkFailures = payload.failures;
+            if (chunkFailures !== void 0 && chunkFailures.length > 0) failures.push(...chunkFailures);
+          }
           const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`];
           if (skipped > 0) parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A`);
           if (failed > 0) parts.push(`\u5931\u8D25 ${failed} \u4E2A`);
           let message = parts.join("\uFF0C");
-          const failures = payload.failures;
-          if (failures !== void 0 && failures.length > 0) {
+          if (failures.length > 0) {
             message += `\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
           }
           setNotice(message);
-          ctx.sessions.refresh?.();
-          ctx.workspaces.refresh?.();
+          ctx.sessions.refresh?.().catch?.(() => {
+          });
+          ctx.workspaces.refresh?.().catch?.(() => {
+          });
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
         } finally {
+          batchBusyRef.current = false;
           setBatchBusy(false);
         }
       })();

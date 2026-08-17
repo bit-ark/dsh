@@ -4,7 +4,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { specKind } from '../index.js'
+import { specKind, safeSpec } from '../index.js'
 
 test('本地目录 spec 分类为 local', () => {
   assert.equal(specKind('link:../dsh-archive'), 'local')
@@ -50,4 +50,13 @@ test('空值回退为 registry（防御）', () => {
   assert.equal(specKind(''), 'registry')
   assert.equal(specKind(null), 'registry')
   assert.equal(specKind(undefined), 'registry')
+})
+
+test('safeSpec 放行合法包名/spec，拒绝 shell 元字符', () => {
+  assert.equal(safeSpec('whale-girl'), 'whale-girl')
+  assert.equal(safeSpec('@scope/name@1.2.0'), '@scope/name@1.2.0')
+  assert.equal(safeSpec('github:user/repo#main'), 'github:user/repo#main')
+  for (const bad of ['x; rm -rf /', 'a && b', 'a | b', '$(id)', '`id`', 'a"b', "a'b", 'a b', 'a<b', 'a>b', 'a\\b']) {
+    assert.throws(() => safeSpec(bad), /非法字符/, `spec ${JSON.stringify(bad)} 必须被拒绝`)
+  }
 })

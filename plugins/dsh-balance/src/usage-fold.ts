@@ -64,6 +64,8 @@ export interface DayBucket {
   requests: number
   /** 该日估算费用（元）；未配置价格表时为 0。 */
   cost: number
+  /** 该日是否有可计价样本（模型配了价格）；无价格表时为 false。 */
+  priced: boolean
 }
 
 /**
@@ -224,6 +226,9 @@ function bucketsFrom(usage: TokenUsageLike): UsageBuckets {
  * 的部分——父日志里已经数过）。对每个 `(turn, step)` 取最后一条样本——step 的
  * `assistant/message` 用量覆盖更早的 usage chunk——这正是防止重试 / 分块 step
  * 被重复计数的关键。
+ * 注意 last-wins 是按事件顺序而非类型优先级：若某条 usage chunk 在其所属
+ * `assistant/message` 之后重放，会覆盖最终样本。这依赖 provider 契约（message
+ * 是终端样本，与 harness 自带 token-meter 语义一致），不额外做类型仲裁。
  */
 export function foldSessionUsage(
   header: SessionHeaderLike,
@@ -254,8 +259,14 @@ export function foldSessionUsage(
     if (index < seed) continue
     const sample = sampleOf(event)
     if (sample === undefined) continue
+    // 没有有效时间戳的样本直接丢弃：图表按本地日历日分桶，buildDayBuckets
+    // 会跳过 time<=0（否则会落到 1970 年），而全量合计 / topKeys / 费用此前
+    // 仍会计入它们——同一批数据两套口径互相矛盾。折叠时就排除，三处口径
+    // 统一为「只统计有时间的样本」。
+    const time = typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : 0
+    if (time <= 0) continue
     byStep.set(`${sample.turn}:${sample.step}`, {
-      time: typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : 0,
+      time,
       provider: currentProvider,
       model: currentModel,
       buckets: bucketsFrom(sample.usage),
@@ -282,6 +293,7 @@ export function sumSamples(samples: readonly UsageSample[]): {
   return { buckets, total: totalOf(buckets), requests: samples.length }
 }
 
+/** 补零到两位（月份 / 日期格式化用）。 */
 function two(n: number): string {
   return String(n).padStart(2, '0')
 }
@@ -324,6 +336,7 @@ export function buildDayBuckets(
       total: 0,
       requests: 0,
       cost: 0,
+      priced: false,
     }
     buckets.push(bucket)
     byKey.set(date, bucket)
@@ -340,7 +353,10 @@ export function buildDayBuckets(
     bucket.cacheWrite += sample.buckets.cacheWrite
     bucket.requests += 1
     const cost = costOfSample(sample, prices, peakHours)
-    if (cost !== undefined) bucket.cost += cost
+    if (cost !== undefined) {
+      bucket.cost += cost
+      bucket.priced = true
+    }
   }
   for (const bucket of buckets) bucket.total = totalOf(bucket)
   return buckets
