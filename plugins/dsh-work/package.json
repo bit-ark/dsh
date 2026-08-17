@@ -16,7 +16,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node test/classify.test.mjs"
+    "test": "node test/classify.test.mjs && node test/preview.test.mjs"
   },
   "dsh": {
     "bundle": {

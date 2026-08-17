@@ -8,8 +8,9 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 |---|---|---|---|---|
 | `dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete | sidebar.footer.action（归档面板） |
 | `dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
-| `dsh-plugmgr` | 0.1.0 | 本地插件管理器：设置-插件「本地插件」tab（列出 / 添加 / 移除 / 启用 / 禁用） | /local-plugins/list \| add \| remove \| set-enabled | settings.plugins.tab（本地插件页） |
+| `dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
 | `dsh-notify` | 0.1.0 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
+| `dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
 | `dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
 | `dsh-work` | 1.0.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
 
@@ -24,6 +25,7 @@ dsh-plugins/
     ├── dsh-balance/       # TypeScript，构建产物在 lib/，含测试
     ├── dsh-plugmgr/   # 纯 JavaScript
     ├── dsh-notify/               # 纯 JavaScript
+    ├── dsh-restart/              # 纯 JavaScript
     ├── dsh-update/                # 纯 JavaScript
     └── dsh-work/              # 纯 JavaScript，含测试
 ```

@@ -1,27 +1,31 @@
 /**
  * dsh-plugmgr — 宿主半（Node）。
  *
- * 管理「本地插件」：通过本地目录（`link:`/`file:`/绝对路径依赖）安装进 dsh
- * profile 的 bundle —— 即 package.json 声明了 `dsh.bundle.patch` 的包，安装
- * 模型与 `dsh plugin --profile <name> add|remove` CLI 完全一致。本半把该模型
+ * 管理 profile 的「已安装插件」：profile 依赖里声明了 `dsh.bundle.patch` 的
+ * 包即为插件加载层（bundle），安装来源不限 —— 本地目录（`link:`/`file:`/绝对
+ * 路径）、npm 注册表（版本号）、Git（`github:` 等）都可以，安装模型与
+ * `dsh plugin --profile <name> add|remove|update` CLI 完全一致。本半把该模型
  * 的机制实现为 JSON 路由，供设置页 UI 从浏览器驱动：
  *
  *   GET  /local-plugins/list          → { ok, profile, plugins: [...] }
- *   POST /local-plugins/add           { dir }        → 新列表
+ *   POST /local-plugins/add           { dir }        → 新列表（本地目录）
+ *   POST /local-plugins/add-named     { spec }       → 新列表（按名称/spec 安装）
  *   POST /local-plugins/remove        { name }       → 新列表
+ *   POST /local-plugins/update        { name }       → 新列表
  *   POST /local-plugins/set-enabled   { name, enabled } → 新列表
  *
  * 语义：
- *  - add/remove 在 profile 目录跑 `pnpm`，成功后把 `dsh.profile.bundles` 层
- *    列表对齐到已安装状态（复刻 CLI 的 reconcile 逻辑）。
+ *  - add/add-named/remove/update 在 profile 目录跑 `pnpm`，成功后把
+ *    `dsh.profile.bundles` 层列表对齐到已安装状态（复刻 CLI 的 reconcile
+ *    逻辑）。
  *  - set-enabled 只编辑 bundles 层列表：依赖保留安装，插件只是不再/恢复加载。
  *  - remove 只卸载，绝不删除插件目录（用户确认的决策）。
  *
  * 并发与性能：
  *  - pnpm 用异步 execFile 执行（不阻塞 web 服务事件循环；spawnSync 最长可
  *    卡死 120s）。
- *  - add/remove/set-enabled 都会改写 profile package.json，用一个简单的
- *    互斥链串行化，防止并发请求交错写坏 manifest。
+ *  - add/add-named/remove/update/set-enabled 都会改写 profile package.json，
+ *    用一个简单的互斥链串行化，防止并发请求交错写坏 manifest。
  *
  * 生效时机：bundle 层在启动时组合，增删/启停要重启 `dsh web` 才生效，客户端
  * 半会在界面提示用户。
@@ -91,6 +95,25 @@ function isLocalSpec(spec) {
   if (typeof spec !== 'string' || spec.length === 0) return false
   if (spec.startsWith('link:') || spec.startsWith('file:')) return true
   return spec.startsWith('/') || /^[A-Za-z]:[\\/]/.test(spec)
+}
+
+/**
+ * 依赖 spec 的安装来源分类：本地目录 / npm 注册表 / Git / npm 别名 /
+ * workspace / 远程 URL / tarball。供列表徽标与「按名称安装」的输入校验使用。
+ * @param spec - profile package.json 里某依赖的值（如 `link:../x`、
+ *   `3.18.2`、`github:user/repo#main`）。
+ */
+export function specKind(spec) {
+  if (typeof spec !== 'string' || spec.length === 0) return 'registry'
+  if (isLocalSpec(spec)) return 'local'
+  if (/^(github|gitlab|bitbucket):/.test(spec) || /^git\+/.test(spec) || /\.git(?:#|$)/.test(spec)) {
+    return 'git'
+  }
+  if (spec.startsWith('npm:')) return 'alias'
+  if (spec.startsWith('workspace:')) return 'workspace'
+  if (/^https?:\/\//.test(spec)) return 'remote'
+  if (/\.(tgz|tar\.gz|tar)$/i.test(spec)) return 'tarball'
+  return 'registry'
 }
 
 /** spec 指向的目录（去掉 link:/file: 前缀）。 */
@@ -196,8 +219,8 @@ async function runPnpm(profileDirPath, args, what) {
 
 /* ── 业务操作 ───────────────────────────────────────────────────────── */
 
-/** 列出 profile 中全部本地目录依赖（含安装态信息与启用状态）。 */
-function listLocalPlugins(config) {
+/** 列出 profile 中全部依赖插件（含安装来源、安装态信息与启用状态）。 */
+function listPlugins(config) {
   const { dir } = profileDir(config)
   const path = join(dir, PACKAGE_JSON)
   if (!existsSync(path)) {
@@ -208,14 +231,15 @@ function listLocalPlugins(config) {
   const dependencies = manifest.dependencies ?? {}
   const plugins = []
   for (const [packageName, spec] of Object.entries(dependencies)) {
-    if (!isLocalSpec(spec)) continue
+    const kind = specKind(spec)
     const pkg = resolveBundlePackageJson(dir, packageName, spec)
     plugins.push({
       name: packageName,
       spec,
-      // 相对 spec（如 link:../x）以 profile 目录为基准解析，避免被
-      // process.cwd() 误导显示错路径。
-      path: resolve(dir, specDirOf(spec)),
+      kind,
+      // 仅本地目录来源有路径；相对 spec（如 link:../x）以 profile 目录为
+      // 基准解析，避免被 process.cwd() 误导显示错路径。其余来源为 null。
+      path: kind === 'local' ? resolve(dir, specDirOf(spec)) : null,
       version: typeof pkg?.version === 'string' ? pkg.version : null,
       description: typeof pkg?.description === 'string' ? pkg.description : null,
       isBundle: isBundlePackage(pkg),
@@ -256,10 +280,10 @@ async function addPlugin(config, dirInput) {
   }
   await runPnpm(profileDirPath, ['add', `link:${dir}`], `添加插件 ${pkg.name}`)
   reconcile(before, readManifest(profileDirPath), profileDirPath)
-  return listLocalPlugins(config)
+  return listPlugins(config)
 }
 
-/** 移除一个本地插件：仅卸载（pnpm remove + reconcile），保留目录文件。 */
+/** 移除一个已安装插件：仅卸载（pnpm remove + reconcile），保留目录文件。 */
 async function removePlugin(config, packageName) {
   const { dir: profileDirPath } = profileDir(config)
   const before = readManifest(profileDirPath)
@@ -268,7 +292,42 @@ async function removePlugin(config, packageName) {
   }
   await runPnpm(profileDirPath, ['remove', packageName], `移除插件 ${packageName}`)
   reconcile(before, readManifest(profileDirPath), profileDirPath)
-  return listLocalPlugins(config)
+  return listPlugins(config)
+}
+
+/**
+ * 按名称/spec 安装插件（npm 注册表包名、name@version、git spec 等）：
+ * 校验 → pnpm add → reconcile。本地目录 spec 走 addPlugin 的目录流程。
+ */
+async function addNamedPlugin(config, specInput) {
+  const spec = String(specInput ?? '').trim()
+  if (spec.length === 0) {
+    throw new Error('请输入要安装的包名或 spec（如 whale-girl / @scope/name@1.2.0 / github:user/repo#main）')
+  }
+  if (isLocalSpec(spec) || /^\.{1,2}(?:[/\\]|$)/.test(spec)) {
+    throw new Error('这是本地路径 spec，请使用「添加本地插件」流程（浏览目录或输入绝对路径）')
+  }
+  const { dir: profileDirPath } = profileDir(config)
+  const before = readManifest(profileDirPath)
+  await runPnpm(profileDirPath, ['add', spec], `安装 ${spec}`)
+  reconcile(before, readManifest(profileDirPath), profileDirPath)
+  return listPlugins(config)
+}
+
+/** 更新一个已安装插件：pnpm update（按声明范围解析，git spec 重取 ref）。 */
+async function updatePlugin(config, packageName) {
+  const name = String(packageName ?? '').trim()
+  if (name.length === 0) {
+    throw new Error('请提供要更新的插件包名')
+  }
+  const { dir: profileDirPath } = profileDir(config)
+  const before = readManifest(profileDirPath)
+  if (before.dependencies?.[name] === undefined) {
+    throw new Error(`插件 ${name} 未安装`)
+  }
+  await runPnpm(profileDirPath, ['update', name], `更新插件 ${name}`)
+  reconcile(before, readManifest(profileDirPath), profileDirPath)
+  return listPlugins(config)
 }
 
 /** 启用/禁用：只改 dsh.profile.bundles 层列表，依赖保留安装（重启生效）。 */
@@ -286,7 +345,7 @@ function setEnabled(config, packageName, enabled) {
     manifest.dsh = { ...manifest.dsh, profile: { ...(manifest.dsh?.profile ?? {}), bundles: current } }
     writeManifest(profileDirPath, manifest)
   }
-  return listLocalPlugins(config)
+  return listPlugins(config)
 }
 
 /* ── HTTP 层 ────────────────────────────────────────────────────────── */
@@ -359,7 +418,7 @@ export function apply(ctx, config) {
             sendJson(res, 405, { ok: false, error: 'method not allowed' })
             return
           }
-          void run(req, res, () => listLocalPlugins(config))
+          void run(req, res, () => listPlugins(config))
         },
       }),
       ctx.webServer.register({
@@ -414,6 +473,42 @@ export function apply(ctx, config) {
             return
           }
           await run(req, res, () => serialize(() => setEnabled(config, body.name, body.enabled === true)))
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/local-plugins/add-named',
+        handler: async (req, res) => {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          let body
+          try {
+            body = await readJsonBody(req)
+          } catch (error) {
+            sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+            return
+          }
+          await run(req, res, () => serialize(() => addNamedPlugin(config, body.spec)))
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/local-plugins/update',
+        handler: async (req, res) => {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          let body
+          try {
+            body = await readJsonBody(req)
+          } catch (error) {
+            sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+            return
+          }
+          await run(req, res, () => serialize(() => updatePlugin(config, body.name)))
         },
       }),
     ]

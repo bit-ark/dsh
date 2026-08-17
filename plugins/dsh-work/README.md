@@ -15,6 +15,18 @@ Git 操作，并支持点击文件在面板内预览内容。
   树保留、右侧详情区即时切换文件内容，中间分隔条可拖动调整目录/详情比例（比例
   持久化）；面板较窄时点击文件自动加宽到 720px 再分栏；手动拖窄到 480px 以下则退回
   整块预览 + 返回按钮。
+- **代码样式**：文本预览带内置语法高亮（无依赖 tokenizer，覆盖 ts/js/json/yaml/
+  py/go/rust/java/cpp/cs/php/ruby/swift/kotlin/shell/sql/css/html/markdown 等；
+  颜色走壳的 `--shiki-token-*` 全局调色板，与代码块一致）。未知扩展名回退纯文本，
+  超 300KB 跳过 token 以保流畅。
+- **MD 解释器**：`.md`/`.markdown`/`.mdx` 文件打开即渲染（内置轻量 GFM 渲染器：
+  标题/段落/代码围栏（带高亮）/列表/引用/分隔线/行内样式），预览头可切回「源码」。
+  链接只放行 http(s)/mailto；图片允许 http(s) 直连与同树相对路径（走
+  `/workbench/asset` 路由，父目录 `..` 拒绝）。
+- **HTML 浏览器**：`.html`/`.htm` 文件打开即在内置浏览器预览——沙箱 iframe
+  （`sandbox="allow-scripts"`，无同源权限，脚本无法触碰面板或应用），相对
+  `src`/`href`（同目录与子目录）自动重写到 `/workbench/asset` 路由，同树
+  css/js/图片可加载；http(s)/根路径/锚点/父目录路径不动。预览头可切回「源码」。
 - **Git tab**：分支、提交图（HEAD 标记）、工作区变更（暂存/取消暂存/全部暂存/
   忽略/取消忽略）、提交框与一键 init（非仓库时）。
 
@@ -28,8 +40,10 @@ index.js    宿主半：GET /workbench/dir | /workbench/file | /workbench/asset
             GET /workbench/git   POST /workbench/git/{init,stage,unstage,
             stage-all,commit,ignore,unignore}
 client.js   客户端半：shell.overlay 注册（id: workbench）+ 目录树/Git/预览 UI
+            （含无依赖语法高亮、轻量 markdown 渲染、html 沙箱预览）
 cordis.patch.yml  自带组合层：插入 dsh-work 行
 test/classify.test.mjs  纯逻辑断言（文件分类 / MIME 映射 / 文本判定）
+test/preview.test.mjs  纯逻辑断言（高亮 token / markdown 渲染 / html 预览重写）
 ```
 
 ## 路由
@@ -67,7 +81,7 @@ workbench 行），挂进 bundles 后须把 profile 自己 `cordis.patch.yml` �
 ## 测试
 
 ```sh
-pnpm test   # 纯逻辑断言：文件分类 / MIME 映射 / 文本-二进制判定
+pnpm test   # 纯逻辑断言：文件分类 / MIME 映射 / 文本-二进制判定 / 高亮 / markdown / html
 ```
 
 ## 已知边界
@@ -76,3 +90,10 @@ pnpm test   # 纯逻辑断言：文件分类 / MIME 映射 / 文本-二进制判
 - 媒体直接走 `/workbench/asset` URL，不做 base64；超大视频依赖浏览器自身的
   流式播放与单区间 Range。
 - 路径信任级别与 `/workbench/dir` 一致：绝对路径 + NUL 校验，跟随符号链接。
+- 高亮是轻量正则 tokenizer，精度低于 shiki：字符串/注释/关键字/类型/调用等
+  常规结构可靠，极端语法（嵌套模板、多行字符串变体）可能着色不完整；超 300KB
+  的文本跳过 token 只做纯文本。
+- markdown 渲染是 GFM 子集：不支持表格、任务列表、脚注；相对路径图片只放行
+  同目录与子目录（拒绝 `..`），链接仅 http(s)/mailto。
+- html 预览为沙箱 iframe：相对资源走 asset 路由可加载，但脚本运行在无同源权限的
+  不透明源里（无法访问应用数据），且 `<iframe>` 嵌套页面不会重写其内部资源。

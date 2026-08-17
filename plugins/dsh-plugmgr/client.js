@@ -1,13 +1,15 @@
 /**
  * dsh-plugmgr — client half (browser plane).
  *
- * 在 设置 → 插件 区块注册「本地插件」tab（settings.plugins.tab 官方插槽，
+ * 在 设置 → 插件 区块注册「插件管理」tab（settings.plugins.tab 官方插槽，
  * order 20，排在「可配置插件」「插件清单」之后）。tab 内：
- *  - 列出当前 profile 的本地插件，用中文展示核心信息（名称/说明/版本/路径/
- *    启用状态）；
- *  - 添加：内置目录浏览器（官方 browse 能力 ctx.workspaces.listDirectory，
- *    逐级浏览 + 面包屑 + 选择此目录）或手动输入路径；
- *  - 移除（两步确认）/ 禁用 / 启用。
+ *  - 列出当前 profile 的全部已安装插件，按安装来源徽标区分
+ *    （本地 / npm / Git / 其他），展示名称/说明/版本/来源/启用状态；
+ *  - 本地目录添加：内置目录浏览器（官方 browse 能力
+ *    ctx.workspaces.listDirectory，逐级浏览 + 面包屑 + 选择此目录）或手动
+ *    输入路径；
+ *  - 按名称安装：输入包名 / name@version / git spec，pnpm add 安装；
+ *  - 移除（两步确认）/ 禁用 / 启用 / 更新。
  * 所有写操作走宿主路由（fetch /local-plugins/*），宿主才是数据权威；
  * 本半只做展示与交互。增删/启停修改的是 profile 文件，重启 dsh web 生效，
  * 界面会给出提示。
@@ -30,11 +32,11 @@ window.__ModuleLoader__.load({
 		const h = React.createElement;
 		const { useState, useEffect, useCallback, useRef } = React;
 
-		// ── 已知本地插件的中文信息（未收录的插件回退到包名、不显示说明） ──
+		// ── 已知插件的中文信息（未收录的插件回退到包名、显示宿主返回的说明） ──
 		const KNOWN_PLUGINS = {
 			"dsh-plugmgr": {
 				label: "本地插件管理器",
-				desc: "在「设置-插件」提供「本地插件」页，管理通过本地目录安装的插件（添加 / 移除 / 启用 / 禁用）。",
+				desc: "在「设置-插件」提供「插件管理」页，管理 profile 里本地目录 / npm / Git 来源安装的插件（添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用）。",
 			},
 			"dsh-archive": {
 				label: "归档",
@@ -48,6 +50,25 @@ window.__ModuleLoader__.load({
 				label: "余额与用量",
 				desc: "设置页展示 DeepSeek 账户余额，以及按天统计的 Token 消耗图表。",
 			},
+			"dsh-notify": {
+				label: "应用内通知",
+				desc: "通用应用内通知：顶部 toast 与会话头铃铛/托盘。",
+			},
+			"dsh-work": {
+				label: "工作面板",
+				desc: "右侧「工作面板」：目录树、文件预览（文本/图片/音视频）与 Git 提交图及操作。",
+			},
+		};
+
+		// ── 安装来源徽标：kind → 中文标签（tarball/remote/workspace 归「其他」） ──
+		const KIND_LABELS = {
+			local: "本地",
+			registry: "npm",
+			alias: "npm",
+			git: "Git",
+			tarball: "其他",
+			remote: "其他",
+			workspace: "其他",
 		};
 
 		// ── 样式：一张带标记的样式表（与 dsh-update 同法），全部用主题 token ──
@@ -171,6 +192,7 @@ window.__ModuleLoader__.load({
 				const [busy, setBusy] = useState(false);
 				const [confirmRemove, setConfirmRemove] = useState(null);
 				const [pathInput, setPathInput] = useState("");
+				const [nameInput, setNameInput] = useState("");
 
 				// 内置目录浏览器状态（browse 能力）。
 				const [browseOpen, setBrowseOpen] = useState(false);
@@ -250,6 +272,15 @@ window.__ModuleLoader__.load({
 					runOp(() => callJson("/local-plugins/add", { dir }), `已添加 ${dir} —— 重启 dsh web 后生效`);
 				}, [pathInput, runOp]);
 
+				const addByName = useCallback(() => {
+					const spec = nameInput.trim();
+					if (spec.length === 0) {
+						setError("请输入要安装的包名或 spec");
+						return;
+					}
+					runOp(() => callJson("/local-plugins/add-named", { spec }), `已安装 ${spec} —— 重启 dsh web 后生效`);
+				}, [nameInput, runOp]);
+
 				const toggle = useCallback((plugin) => {
 					runOp(
 						() => callJson("/local-plugins/set-enabled", { name: plugin.name, enabled: !plugin.enabled }),
@@ -267,23 +298,41 @@ window.__ModuleLoader__.load({
 					setConfirmRemove(null);
 					runOp(
 						() => callJson("/local-plugins/remove", { name: plugin.name }),
-						`已移除 ${plugin.name}（目录文件保留）—— 重启 dsh web 后生效`,
+						plugin.kind === "local"
+							? `已移除 ${plugin.name}（目录文件保留）—— 重启 dsh web 后生效`
+							: `已移除 ${plugin.name} —— 重启 dsh web 后生效`,
 					);
 				}, [confirmRemove, runOp]);
 
-				// 中文信息卡：已知插件给中文名+中文说明；未知插件只显示包名。
+				const update = useCallback((plugin) => {
+					runOp(
+						() => callJson("/local-plugins/update", { name: plugin.name }),
+						`已触发更新 ${plugin.name} —— 重启 dsh web 后生效`,
+					);
+				}, [runOp]);
+
+				// 信息卡：已知插件给中文名+中文说明；未知插件用宿主返回的
+				// description，再没有才只显示包名。
 				const rowOf = (plugin) => {
 					const known = KNOWN_PLUGINS[plugin.name];
 					const title = known !== undefined ? known.label : plugin.name;
-					const desc = known !== undefined ? known.desc : null;
+					const desc = known !== undefined ? known.desc
+						: (typeof plugin.description === "string" && plugin.description.length > 0
+							? plugin.description
+							: null);
+					const kindLabel = KIND_LABELS[plugin.kind] || "其他";
 					const versionText = plugin.version !== null && plugin.version !== undefined
 						? `版本 v${plugin.version}`
 						: "版本 未知";
+					const sourceText = plugin.kind === "local" && plugin.path !== null && plugin.path !== undefined
+						? `路径 ${plugin.path}`
+						: (typeof plugin.spec === "string" ? `来源 ${plugin.spec}` : null);
 					return h("div", { key: plugin.name, className: "lpm-row" },
 						h("div", { className: "lpm-main" },
 							h("div", { className: "lpm-name" },
 								title,
 								plugin.name !== title ? h("span", { className: "lpm-badge" }, plugin.name) : null,
+								h("span", { className: "lpm-badge" }, kindLabel),
 								h("span", {
 									className: plugin.enabled ? "lpm-badge lpm-badge-on" : "lpm-badge",
 								}, plugin.enabled ? "已启用" : "已禁用"),
@@ -292,7 +341,7 @@ window.__ModuleLoader__.load({
 							),
 							desc !== null ? h("div", { className: "lpm-desc" }, desc) : null,
 							h("div", { className: "lpm-meta" }, versionText),
-							h("div", { className: "lpm-path" }, `路径 ${plugin.path}`),
+							sourceText !== null ? h("div", { className: "lpm-path" }, sourceText) : null,
 						),
 						h("div", { className: "lpm-ops" },
 							plugin.isBundle
@@ -303,6 +352,12 @@ window.__ModuleLoader__.load({
 									onClick: () => toggle(plugin),
 								}, plugin.enabled ? "禁用" : "启用")
 								: null,
+							h("button", {
+								type: "button",
+								className: "lpm-btn",
+								disabled: busy,
+								onClick: () => update(plugin),
+							}, "更新"),
 							h("button", {
 								type: "button",
 								className: "lpm-btn lpm-btn-danger",
@@ -399,6 +454,23 @@ window.__ModuleLoader__.load({
 							disabled: busy || pathInput.trim().length === 0,
 							onClick: addByInput,
 						}, "添加"),
+					),
+					h("div", { className: "lpm-actions" },
+						h("input", {
+							className: "lpm-input",
+							type: "text",
+							value: nameInput,
+							disabled: busy,
+							placeholder: "按名称安装：whale-girl / @scope/name@1.2.0 / github:user/repo#main",
+							onChange: (event) => setNameInput(event.target.value),
+							onKeyDown: (event) => { if (event.key === "Enter") addByName(); },
+						}),
+						h("button", {
+							type: "button",
+							className: "lpm-btn",
+							disabled: busy || nameInput.trim().length === 0,
+							onClick: addByName,
+						}, "安装"),
 						h("button", {
 							type: "button",
 							className: "lpm-btn",
@@ -410,13 +482,13 @@ window.__ModuleLoader__.load({
 					error !== null ? h("div", { className: "lpm-error" }, error) : null,
 					notice !== null ? h("div", { className: "lpm-notice" }, notice) : null,
 					h("div", { className: "lpm-hint" },
-						"本地插件 = 通过本地目录安装（link:/file:）的 bundle。增删/启停修改 profile 文件，重启 dsh web 后生效。",
+						"本页管理 profile 已安装插件（本地 / npm / Git 来源）。是否成为加载层取决于包是否声明 dsh.bundle；增删/启停修改 profile 文件，重启 dsh web 后生效。",
 					),
 					plugins === null
 						? h("div", { className: "lpm-empty" }, "加载中…")
 						: plugins.length === 0
 							? h("div", { className: "lpm-empty" },
-								"暂无本地插件。点击「添加本地插件…」选择一个插件目录。")
+								"暂无已安装插件。可通过「添加本地插件…」选择本地目录，或在「按名称安装」输入包名。")
 							: h("div", { className: "lpm-list" }, plugins.map(rowOf)),
 				);
 			}
@@ -426,7 +498,7 @@ window.__ModuleLoader__.load({
 					name: "settings.plugins.tab",
 					id: "local-plugins",
 					order: 20,
-					label: "本地插件",
+					label: "插件管理",
 				}, LocalPluginsTab),
 				"dsh-plugmgr: tab registration",
 			);

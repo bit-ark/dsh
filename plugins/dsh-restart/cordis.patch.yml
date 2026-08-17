@@ -1,0 +1,11 @@
+# dsh-restart bundle layer: inserts the dsh-restart row.
+# Sidebar 一键重启 dsh web：两步确认后在原终端窗口重启服务（macOS Terminal.app）。
+# config:
+#   cwd:      服务启动目录（默认 process.cwd()，即 harness checkout）
+#   command:  重启命令（默认 pnpm dsh web）
+#   port:     服务端口（默认 3080）
+#   delayMs:  触发到杀进程的延迟，给 HTTP 响应留时间（默认 4000）
+#   logPath:  重启日志路径（默认 ~/.dsh/restart.log）
+- insert:
+    - id: dsh-restart
+      name: dsh-restart

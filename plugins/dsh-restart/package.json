@@ -1,8 +1,8 @@
 {
-  "name": "dsh-plugmgr",
+  "name": "dsh-restart",
   "version": "0.1.0",
   "private": true,
-  "description": "已安装插件管理器：在设置-插件里提供「插件管理」tab，管理 profile 里本地目录 / npm / Git 来源安装的插件（列出/添加/按名称安装/移除/禁用/启用/更新）。",
+  "description": "侧边栏一键重启 dsh web：两步确认后在原终端窗口重启服务（macOS Terminal.app）。",
   "type": "module",
   "main": "index.js",
   "files": [
@@ -10,9 +10,6 @@
     "client.js",
     "cordis.patch.yml"
   ],
-  "scripts": {
-    "test": "node --test 'tests/*.test.mjs'"
-  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

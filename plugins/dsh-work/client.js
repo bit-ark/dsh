@@ -112,6 +112,40 @@ window.__ModuleLoader__.load({
 .dwb-split-divider:hover::after, .dwb-split-divider[data-dragging='true']::after { opacity: 1; background: var(--dsw-alias-border-l3); }
 .dwb-dragging, .dwb-dragging * { user-select: none !important; }
 @media (prefers-reduced-motion: reduce) { .dwb-tip { animation: none; } }
+/* ── preview: syntax-highlight tokens (shell's global --shiki-token-* palette) ── */
+.dwb-tok-comment { color: var(--shiki-token-comment); }
+.dwb-tok-string { color: var(--shiki-token-string); }
+.dwb-tok-number { color: var(--shiki-token-constant); }
+.dwb-tok-keyword { color: var(--shiki-token-keyword); }
+.dwb-tok-type { color: var(--shiki-token-function); }
+.dwb-tok-call { color: var(--shiki-token-function); }
+.dwb-tok-prop { color: var(--shiki-token-constant); }
+.dwb-tok-param { color: var(--shiki-token-parameter); }
+.dwb-tok-punct { color: var(--shiki-token-punctuation); }
+/* ── preview: 源码 | 预览 view switch ── */
+.dwb-switch { flex: none; display: flex; gap: 2px; padding: 2px; background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; }
+.dwb-switchbtn { border: none; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; padding: 1px 8px; border-radius: 4px; cursor: pointer; }
+.dwb-switchbtn:hover { color: var(--dsw-alias-label-primary); }
+.dwb-switchbtn[data-active] { background: var(--dsw-alias-markdown-code-segment-selected); color: var(--dsw-alias-label-primary); }
+/* ── preview: rendered markdown ── */
+.dwb-preview-md { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px; font-size: 13px; line-height: 1.7; color: var(--dsw-alias-label-primary); }
+.dwb-preview-md h1 { font-size: 18px; margin: 10px 0 8px; font-weight: 700; }
+.dwb-preview-md h2 { font-size: 16px; margin: 10px 0 6px; font-weight: 700; }
+.dwb-preview-md h3 { font-size: 14px; margin: 8px 0 4px; font-weight: 700; }
+.dwb-preview-md h4, .dwb-preview-md h5, .dwb-preview-md h6 { font-size: 13px; margin: 8px 0 4px; font-weight: 700; }
+.dwb-preview-md p { margin: 6px 0; }
+.dwb-preview-md ul, .dwb-preview-md ol { margin: 6px 0; padding-left: 22px; }
+.dwb-preview-md li { margin: 2px 0; }
+.dwb-preview-md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-secondary); }
+.dwb-preview-md hr { border: none; border-top: 1px solid var(--dsw-alias-border-l2); margin: 12px 0; }
+.dwb-preview-md code { background: var(--dsw-alias-bg-layer-3); border-radius: 4px; padding: 1px 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.dwb-preview-md pre { background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 10px 12px; overflow: auto; margin: 8px 0; }
+.dwb-preview-md pre code { background: transparent; padding: 0; border-radius: 0; }
+.dwb-preview-md a { color: var(--dsw-alias-brand-text); text-decoration: none; }
+.dwb-preview-md a:hover { text-decoration: underline; }
+.dwb-preview-md img { max-width: 100%; border-radius: 6px; }
+/* ── preview: sandboxed html browser ── */
+.dwb-preview-frame { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: #fff; }
 `;
 		if (typeof document !== "undefined" && document.getElementById("dsh-work-style") === null) {
 			const styleEl = document.createElement("style");
@@ -365,11 +399,458 @@ window.__ModuleLoader__.load({
 			return h("div", { className: props.refreshing ? "dwb-scroll dwb-busy" : "dwb-scroll" }, rows);
 		}
 
+		// ── preview rendering: dependency-free syntax highlighting ────────────
+		// Token colors resolve through the shell's global --shiki-token-* palette
+		// so the panel matches the app's fenced code blocks. Everything is
+		// HTML-escaped before token spans wrap it. Unknown languages fall back to
+		// a generic mode (strings, numbers); very large files skip token spans to
+		// keep the panel responsive.
+
+		function escapeHtml(text) {
+			return text
+				.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+				.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+		}
+
+		const HL_LANG_BY_EXT = {
+			ts: "javascript", tsx: "javascript", js: "javascript", jsx: "javascript",
+			mjs: "javascript", cjs: "javascript", mts: "javascript", cts: "javascript",
+			json: "json", jsonc: "json", yml: "yaml", yaml: "yaml", toml: "toml",
+			ini: "ini", conf: "ini", env: "ini", gitignore: "ini",
+			py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
+			c: "cpp", h: "cpp", cpp: "cpp", hpp: "cpp", cs: "csharp", php: "php",
+			sh: "shell", bash: "shell", zsh: "shell", fish: "shell",
+			sql: "sql", css: "css", scss: "css", less: "css",
+			html: "markup", htm: "markup", xml: "markup",
+			md: "markdown", mdx: "markdown",
+		};
+
+		const HL_KEYWORDS = {
+			javascript: ["const","let","var","function","return","if","else","for","while","do","switch","case","default","break","continue","new","class","extends","super","this","typeof","instanceof","in","of","import","export","from","async","await","try","catch","finally","throw","yield","delete","void","null","undefined","true","false","interface","type","enum","implements","public","private","protected","readonly","static","abstract","as","keyof","namespace","declare","get","set","require"],
+			json: ["true","false","null"],
+			python: ["def","class","return","if","elif","else","for","while","try","except","finally","with","as","import","from","lambda","yield","pass","break","continue","raise","global","nonlocal","del","assert","async","await","True","False","None","not","and","or","in","is","self","print"],
+			ruby: ["def","class","module","return","if","elsif","else","unless","case","when","while","until","for","do","end","begin","rescue","ensure","raise","yield","require","include","extend","attr_accessor","attr_reader","attr_writer","true","false","nil","and","or","not","new","puts"],
+			go: ["func","package","import","return","if","else","for","range","switch","case","default","break","continue","goto","defer","go","chan","select","struct","interface","map","type","var","const","true","false","nil","fallthrough"],
+			rust: ["fn","let","mut","const","static","struct","enum","trait","impl","mod","use","pub","crate","self","Self","return","if","else","match","for","while","loop","break","continue","move","ref","as","where","dyn","async","await","true","false","unsafe","type"],
+			java: ["public","private","protected","class","interface","enum","extends","implements","import","package","return","if","else","for","while","do","switch","case","default","break","continue","new","try","catch","finally","throw","throws","static","final","void","this","super","abstract","synchronized","volatile","transient","instanceof","true","false","null","record","var"],
+			cpp: ["public","private","protected","class","struct","union","enum","namespace","using","template","typename","return","if","else","for","while","do","switch","case","default","break","continue","new","delete","try","catch","throw","static","const","constexpr","inline","virtual","override","final","this","true","false","nullptr","sizeof","typedef","extern","register","volatile","mutable","friend","operator","goto"],
+			csharp: ["public","private","protected","internal","class","struct","interface","enum","namespace","using","return","if","else","for","foreach","while","do","switch","case","default","break","continue","new","try","catch","finally","throw","static","const","readonly","virtual","override","sealed","abstract","async","await","var","true","false","null","this","base","out","ref","in","is","as","typeof","delegate","event","get","set","value","record"],
+			php: ["function","class","interface","trait","namespace","use","return","if","else","elseif","for","foreach","while","do","switch","case","default","break","continue","new","try","catch","finally","throw","static","public","private","protected","const","echo","print","true","false","null","isset","empty","array","require","include","require_once","include_once","abstract","final","extends","implements","instanceof","and","or","xor","list","global"],
+			swift: ["func","class","struct","enum","protocol","extension","import","return","if","else","guard","for","while","repeat","switch","case","default","break","continue","fallthrough","new","try","catch","throw","throws","static","let","var","inout","where","deinit","init","self","true","false","nil","as","is","typealias","open","public","internal","fileprivate","private","lazy","mutating","nonmutating","override","required","convenience","associatedtype"],
+			kotlin: ["fun","class","object","interface","enum","data","sealed","abstract","open","override","final","val","var","const","return","if","else","when","for","while","do","try","catch","finally","throw","import","package","this","super","true","false","null","is","in","as","by","companion","init","constructor","internal","public","private","protected","inline","suspend","infix","operator","lateinit","typealias","get","set"],
+			shell: ["if","then","else","elif","fi","for","while","do","done","case","esac","function","in","return","exit","export","local","readonly","set","unset","shift","select","until","break","continue","source","echo","printf","cd","ls","mkdir","rm","cp","mv","cat","grep","sed","awk","curl","wget","git","npm","pnpm","node","true","false"],
+			sql: ["select","from","where","insert","into","values","update","set","delete","create","table","alter","drop","index","view","join","inner","left","right","full","outer","on","group","by","order","having","limit","offset","distinct","as","and","or","not","null","is","in","between","like","exists","union","all","primary","key","foreign","references","constraint","default","unique","check","case","when","then","else","end","count","sum","avg","min","max","begin","commit","rollback","transaction"],
+			toml: ["true","false"],
+		};
+
+		const HL_TYPES = {
+			javascript: ["Number","String","Boolean","Object","Array","Promise","Map","Set","WeakMap","WeakSet","Error","Date","RegExp","JSON","Math","Function","Symbol","BigInt","console","window","document","globalThis","process","Buffer","HTMLElement"],
+			go: ["int","int8","int16","int32","int64","uint","uint8","uint16","uint32","uint64","uintptr","float32","float64","complex64","complex128","byte","rune","string","bool","error","any","chan","func","map","slice"],
+			rust: ["i8","i16","i32","i64","i128","isize","u8","u16","u32","u64","u128","usize","f32","f64","bool","char","str","String","Vec","Option","Result","Box","Rc","Arc","HashMap","HashSet","BTreeMap","BTreeSet","Iterator","Sized"],
+			java: ["String","Integer","Long","Double","Float","Boolean","Object","Class","List","Map","Set","ArrayList","HashMap","HashSet","Collection","Optional","Exception","RuntimeException","Error","Thread","Runnable","System","Math","int","long","double","float","boolean","char","byte","short","void"],
+			cpp: ["int","long","short","char","bool","float","double","void","size_t","std","string","vector","map","set","unordered_map","unique_ptr","shared_ptr","auto","uint8_t","int32_t","int64_t","uint32_t","uint64_t","FILE","cout","cin","endl"],
+			csharp: ["string","int","long","double","float","bool","char","byte","short","uint","ulong","decimal","object","void","var","dynamic","List","Dictionary","HashSet","IEnumerable","Task","Action","Func","Exception","Console","Math","String","DateTime","Guid","Nullable"],
+			python: ["int","float","str","bytes","bool","list","tuple","dict","set","frozenset","None","object","type","Exception","ValueError","TypeError","KeyError","IndexError","RuntimeError","FileNotFoundError","self","cls"],
+			ruby: ["String","Integer","Float","Symbol","Array","Hash","Range","Proc","Lambda","Module","Class","Object","Exception","StandardError","nil","true","false"],
+			swift: ["Int","Double","Float","Bool","String","Character","Array","Dictionary","Set","Optional","Any","AnyObject","Self","Void","Never","Error","Result","URL","Date","Data","CGFloat","NSObject","UIView","UIViewController"],
+			kotlin: ["Int","Long","Double","Float","Boolean","String","Char","Byte","Short","Unit","Any","Nothing","List","MutableList","Map","MutableMap","Set","MutableSet","Array","Sequence","Pair","Triple","Exception","Error","Result","Unit"],
+			php: ["int","float","string","bool","array","object","mixed","void","null","false","true","callable","iterable","self","static","parent","Exception","Error","stdClass"],
+		};
+
+		const ESCAPE_RE = /[.*+?^${}()|[\]\\]/g;
+		function escapeRe(text) {
+			return text.replace(ESCAPE_RE, "\\$&");
+		}
+
+		const HL_CACHE = new Map();
+		/** Build (or fetch) the master token regex for one language id. */
+		function hlRegex(lang) {
+			const cached = HL_CACHE.get(lang);
+			if (cached !== undefined) return cached;
+			const cfg = {
+				line: null, block: null, keywords: null, types: null, quotes: ['"', "'", "`"],
+				extra: null, calls: false,
+			};
+			// per-language config lives on HL_LANGS; a language without one is generic.
+			const known = HL_LANGS[lang];
+			if (known !== undefined) Object.assign(cfg, known);
+			const parts = [];
+			const kinds = [];
+			const add = (pattern, kind) => { parts.push("(" + pattern + ")"); kinds.push(kind); };
+			if (cfg.block !== null) add(cfg.block, "comment");
+			if (cfg.line !== null) add(cfg.line, "comment");
+			for (const q of cfg.quotes) {
+				if (q.length > 1) add(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\s\\S]*?" + q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "string");
+				else add(q + "(?:\\\\.|[^" + q + "\\\\\\n])*" + q, "string");
+			}
+			add("\\b\\d(?:_?\\d)*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b", "number");
+			if (cfg.keywords !== null && cfg.keywords.length > 0) {
+				add("\\b(?:" + cfg.keywords.map(escapeRe).sort((a, b) => b.length - a.length).join("|") + ")\\b", "keyword");
+			}
+			if (cfg.types !== null && cfg.types.length > 0) {
+				add("\\b(?:" + cfg.types.map(escapeRe).sort((a, b) => b.length - a.length).join("|") + ")\\b", "type");
+			}
+			if (cfg.extra !== null) add(cfg.extra, "number");
+			if (cfg.calls) add("\\b[A-Za-z_$][\\w$]*(?=\\s*\\()", "call");
+			const re = new RegExp(parts.join("|"), "g");
+			const built = { re, kinds };
+			HL_CACHE.set(lang, built);
+			return built;
+		}
+
+		const HL_LANGS = {
+			javascript: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.javascript, types: HL_TYPES.javascript, calls: true },
+			json: { line: null, block: null, keywords: HL_KEYWORDS.json, types: null, quotes: ['"'] },
+			python: { line: "#[^\\n]*", block: null, keywords: HL_KEYWORDS.python, types: HL_TYPES.python, quotes: ["'''", '"""', "'", '"'], calls: true },
+			ruby: { line: "#[^\\n]*", block: null, keywords: HL_KEYWORDS.ruby, types: HL_TYPES.ruby, quotes: ['"', "'"], calls: true, extra: ":[A-Za-z_][\\w]*" },
+			go: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.go, types: HL_TYPES.go, quotes: ['"', "`"], calls: true },
+			rust: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.rust, types: HL_TYPES.rust, quotes: ['"', "'"] },
+			java: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.java, types: HL_TYPES.java, quotes: ['"', "'"] },
+			cpp: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.cpp, types: HL_TYPES.cpp, quotes: ['"', "'"] },
+			csharp: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.csharp, types: HL_TYPES.csharp, quotes: ['"', "'"] },
+			php: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.php, types: HL_TYPES.php, quotes: ['"', "'"], extra: "\\$[A-Za-z_][\\w]*" },
+			swift: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.swift, types: HL_TYPES.swift, quotes: ['"'] },
+			kotlin: { line: "\\/\\/[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.kotlin, types: HL_TYPES.kotlin, quotes: ['"', "'"] },
+			shell: { line: "#[^\\n]*", block: null, keywords: HL_KEYWORDS.shell, types: null, quotes: ['"', "'"], extra: "\\$\\{?[A-Za-z_][\\w]*\\}?" },
+			sql: { line: "--[^\\n]*", block: "\\/\\*[\\s\\S]*?\\*\\/", keywords: HL_KEYWORDS.sql, types: null, quotes: ["'", '"'] },
+			toml: { line: "#[^\\n]*", block: null, keywords: HL_KEYWORDS.toml, types: null, quotes: ['"""', '"', "'"] },
+			ini: { line: "[;#][^\\n]*", block: null, keywords: [], types: null, quotes: ['"', "'"] },
+		};
+
+		/** The largest text that still gets token spans; beyond it the preview stays plain (escaped). */
+		const HL_MAX = 300000;
+
+		/** Highlight one source text into escaped HTML with token spans. */
+		function highlightCode(text, lang) {
+			if (lang === "markup") return highlightMarkup(text);
+			if (lang === "markdown") return highlightMarkdownSource(text);
+			if (lang === "css") return highlightCss(text);
+			if (lang === "yaml") return highlightYaml(text);
+			if (lang === "ini") return highlightIni(text);
+			if (text.length > HL_MAX) return escapeHtml(text);
+			const { re, kinds } = hlRegex(lang);
+			re.lastIndex = 0;
+			let out = "";
+			let last = 0;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				if (match.index > last) out += escapeHtml(text.slice(last, match.index));
+				let kind = "plain";
+				for (let i = 1; i < match.length; i++) {
+					if (match[i] !== undefined) { kind = kinds[i - 1]; break; }
+				}
+				out += '<span class="dwb-tok ' + kind + '">' + escapeHtml(match[0]) + "</span>";
+				last = match.index + match[0].length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		/** Wrap already-escaped text with the given token class, or leave plain. */
+		function tokSpan(escaped, kind) {
+			return kind === null ? escaped : '<span class="dwb-tok ' + kind + '">' + escaped + "</span>";
+		}
+
+		/** Markup (html/xml): tags, attribute names, quoted values, comments. */
+		function highlightMarkup(text) {
+			if (text.length > HL_MAX) return escapeHtml(text);
+			let out = "";
+			let last = 0;
+			const re = /<!--[\s\S]*?-->|<[^>]*>|[^<]+/g;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				const piece = match[0];
+				if (piece.charCodeAt(0) === 60) { // '<'
+					if (piece.startsWith("<!--")) {
+						out += '<span class="dwb-tok comment">' + escapeHtml(piece) + "</span>";
+					} else {
+						out += highlightTag(piece);
+					}
+				} else {
+					out += escapeHtml(piece);
+				}
+				last = match.index + piece.length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		function highlightTag(tag) {
+			let out = "";
+			let last = 0;
+			const re = /([A-Za-z_][\w-]*)(\s*=\s*)("(?:[^"]*)"|'(?:[^']*)')|[A-Za-z_][\w-]*|\s+/g;
+			let match;
+			while ((match = re.exec(tag)) !== null) {
+				const piece = match[0];
+				if (match[1] !== undefined) {
+					out += escapeHtml(tag.slice(last, match.index));
+					out += '<span class="dwb-tok param">' + escapeHtml(match[1]) + "</span>";
+					out += '<span class="dwb-tok punct">' + escapeHtml(match[2]) + "</span>";
+					out += '<span class="dwb-tok string">' + escapeHtml(match[3]) + "</span>";
+				} else {
+					const name = /[A-Za-z_][\w-]*/.exec(piece);
+					if (name !== null && name.index === 0 && /^[A-Za-z]/.test(piece)) {
+						out += '<span class="dwb-tok ' + (piece.charAt(1) === "/" ? "punct" : "type") + '">' + escapeHtml(piece) + "</span>";
+					} else {
+						out += escapeHtml(piece);
+					}
+				}
+				last = match.index + piece.length;
+			}
+			if (last < tag.length) out += escapeHtml(tag.slice(last));
+			return out;
+		}
+
+		/** CSS: comments, at-rules, selectors, properties, values, numbers. */
+		function highlightCss(text) {
+			if (text.length > HL_MAX) return escapeHtml(text);
+			let out = "";
+			let last = 0;
+			const re = /\/\*[\s\S]*?\*\/|@[\w-]+|\b\d[\w.%]*\b|([^{};]+)(?=\s*\{)|([\w-]+)(?=\s*:)|[{};:]/g;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				const piece = match[0];
+				let kind = null;
+				if (piece.startsWith("/*")) kind = "comment";
+				else if (piece.charAt(0) === "@") kind = "keyword";
+				else if (/^\d/.test(piece)) kind = "number";
+				else if (match[1] !== undefined) kind = "type";
+				else if (match[2] !== undefined) kind = "param";
+				else if (/[{};:]/.test(piece)) kind = "punct";
+				if (match.index > last) out += escapeHtml(text.slice(last, match.index));
+				out += tokSpan(escapeHtml(piece), kind);
+				last = match.index + piece.length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		/** YAML: comments, `key:` mappings, bullets, strings, numbers, booleans. */
+		function highlightYaml(text) {
+			if (text.length > HL_MAX) return escapeHtml(text);
+			let out = "";
+			let last = 0;
+			const re = /#[^\n]*|"[^"]*"|'[^']*'|\b\d[\w.]*\b|\b(?:true|false|null|yes|no)\b|^\s*[-*]\s+|^(\s*)([\w.][\w .-]*)(?=\s*:)|:/gm;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				const piece = match[0];
+				let kind = null;
+				if (piece.charAt(0) === "#") kind = "comment";
+				else if (piece.charAt(0) === '"' || piece.charAt(0) === "'") kind = "string";
+				else if (/^\d/.test(piece)) kind = "number";
+				else if (/^(?:true|false|null|yes|no)$/.test(piece.trim())) kind = "keyword";
+				else if (/^\s*[-*]\s+$/.test(piece)) kind = "punct";
+				else if (match[2] !== undefined) kind = "prop";
+				else if (piece === ":") kind = "punct";
+				if (match.index > last) out += escapeHtml(text.slice(last, match.index));
+				out += tokSpan(escapeHtml(piece), kind);
+				last = match.index + piece.length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		/** INI: comments, `key = value` mappings, strings. */
+		function highlightIni(text) {
+			if (text.length > HL_MAX) return escapeHtml(text);
+			let out = "";
+			let last = 0;
+			const re = /[;#][^\n]*|"[^"]*"|'[^']*'|\b\d[\w.]*\b|^(\s*)([\w.-]+)(?=\s*=)|[=\[\]]/gm;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				const piece = match[0];
+				let kind = null;
+				if (piece.charAt(0) === ";" || piece.charAt(0) === "#") kind = "comment";
+				else if (piece.charAt(0) === '"' || piece.charAt(0) === "'") kind = "string";
+				else if (/^\d/.test(piece)) kind = "number";
+				else if (match[2] !== undefined) kind = "prop";
+				else if (/[=\[\]]/.test(piece)) kind = "punct";
+				if (match.index > last) out += escapeHtml(text.slice(last, match.index));
+				out += tokSpan(escapeHtml(piece), kind);
+				last = match.index + piece.length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		/** Markdown source view: headings, emphasis, links, inline code, lists, hr. */
+		function highlightMarkdownSource(text) {
+			if (text.length > HL_MAX) return escapeHtml(text);
+			let out = "";
+			let last = 0;
+			const re = /^#{1,6}\s.*$|^>.*$|^\s*[-*+]\s+.*$|^\s*\d+[.)]\s+.*$|^\s*(?:---+|\*\*\*+)\s*$|`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*|~~[^~]+~~|\[[^\]]+\]\([^)]*\)|!\[[^\]]*\]\([^)]*\)/gm;
+			let match;
+			while ((match = re.exec(text)) !== null) {
+				const piece = match[0];
+				let kind = null;
+				if (/^#{1,6}\s/.test(piece)) kind = "keyword";
+				else if (/^>/.test(piece)) kind = "comment";
+				else if (/^\s*[-*+]\s|\s*\d+[.)]\s/.test(piece)) kind = "punct";
+				else if (/^(?:---+|\*\*\*+)$/.test(piece.trim())) kind = "punct";
+				else if (piece.charAt(0) === "`" || /^\*\*/.test(piece) || /^\*/.test(piece) || /^~~/.test(piece)) kind = "string";
+				else if (piece.charAt(0) === "[" || piece.charAt(0) === "!") kind = "constant";
+				if (match.index > last) out += escapeHtml(text.slice(last, match.index));
+				out += tokSpan(escapeHtml(piece), kind);
+				last = match.index + piece.length;
+			}
+			if (last < text.length) out += escapeHtml(text.slice(last));
+			return out;
+		}
+
+		// ── preview rendering: markdown → sanitized HTML ──────────────────────
+		// A compact GFM subset: headings, paragraphs, fenced code (with
+		// highlighting), lists, blockquotes, hr, and inline code/emphasis/links/
+		// images. All text is escaped; links allow http(s)/mailto only, images
+		// allow http(s) plus same-tree relative paths (served through the
+		// workbench's own asset route, parent traversal refused).
+
+		const MD_FENCE_ALIASES = { ts: "javascript", tsx: "javascript", js: "javascript", jsx: "javascript", py: "python", rb: "ruby", go: "go", rs: "rust", java: "java", cs: "csharp", php: "php", sh: "shell", bash: "shell", zsh: "shell", sql: "sql", yaml: "yaml", yml: "yaml", json: "json", html: "markup", xml: "markup", css: "css", md: "markdown", markdown: "markdown", ini: "ini", toml: "toml" };
+
+		function mdLinkHref(url) {
+			if (/^https?:/i.test(url) || /^mailto:/i.test(url)) return url;
+			return null;
+		}
+
+		function mdImageHref(src, dir) {
+			if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(src)) {
+				return /^https?:/i.test(src) ? src : null;
+			}
+			if (src.includes("..")) return null;
+			return assetUrl(dir === "" ? src : dir + "/" + src);
+		}
+
+		function inlineMd(raw, dir) {
+			let out = "";
+			let last = 0;
+			const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*|~~[^~]+~~|!\[([^\]]*)\]\(([^)]*)\)|\[([^\]]+)\]\(([^)]*)\))/g;
+			let match;
+			while ((match = re.exec(raw)) !== null) {
+				out += escapeHtml(raw.slice(last, match.index));
+				const token = match[0];
+				if (token.charAt(0) === "`") out += '<code class="dwb-md-code">' + escapeHtml(token.slice(1, -1)) + "</code>";
+				else if (token.startsWith("**")) out += "<strong>" + escapeHtml(token.slice(2, -2)) + "</strong>";
+				else if (token.startsWith("~~")) out += "<del>" + escapeHtml(token.slice(2, -2)) + "</del>";
+				else if (token.charAt(0) === "*") out += "<em>" + escapeHtml(token.slice(1, -1)) + "</em>";
+				else if (token.charAt(0) === "!") {
+					const href = mdImageHref(match[3], dir);
+					out += href === null
+						? escapeHtml(token)
+						: '<img src="' + href + '" alt="' + escapeHtml(match[2]) + '">';
+				} else {
+					const href = mdLinkHref(match[5]);
+					out += href === null
+						? escapeHtml(token)
+						: '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(match[4]) + "</a>";
+				}
+				last = match.index + token.length;
+			}
+			out += escapeHtml(raw.slice(last));
+			return out;
+		}
+
+		/** Render markdown into sanitized HTML. `dir` is the file's directory (for relative images). */
+		function renderMarkdown(text, dir) {
+			const lines = text.split("\n");
+			const out = [];
+			let list = null;
+			let i = 0;
+			const closeList = () => {
+				if (list !== null) { out.push("</" + list + ">"); list = null; }
+			};
+			while (i < lines.length) {
+				const line = lines[i];
+				const fence = /^```([\w+-]*)\s*$/.exec(line);
+				if (fence !== null) {
+					closeList();
+					const lang = MD_FENCE_ALIASES[fence[1]] ?? (fence[1] === "" ? undefined : fence[1]);
+					const buf = [];
+					i++;
+					while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+					i++;
+					const code = buf.join("\n");
+					out.push('<pre class="dwb-md-pre"><code>' + highlightCode(code, lang) + "</code></pre>");
+					continue;
+				}
+				const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+				if (heading !== null) {
+					closeList();
+					const level = heading[1].length;
+					out.push("<h" + level + ">" + inlineMd(heading[2], dir) + "</h" + level + ">");
+					i++;
+					continue;
+				}
+				if (/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(line)) {
+					closeList();
+					out.push("<hr>");
+					i++;
+					continue;
+				}
+				const quote = /^\s*>\s?(.*)$/.exec(line);
+				if (quote !== null) {
+					closeList();
+					const buf = [quote[1]];
+					i++;
+					while (i < lines.length && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+					out.push("<blockquote>" + buf.map((part) => inlineMd(part, dir)).join("<br>") + "</blockquote>");
+					continue;
+				}
+				const ul = /^\s*[-*+]\s+(.*)$/.exec(line);
+				if (ul !== null) {
+					if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+					out.push("<li>" + inlineMd(ul[1], dir) + "</li>");
+					i++;
+					continue;
+				}
+				const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+				if (ol !== null) {
+					if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+					out.push("<li>" + inlineMd(ol[1], dir) + "</li>");
+					i++;
+					continue;
+				}
+				if (line.trim() === "") {
+					closeList();
+					out.push("");
+					i++;
+					continue;
+				}
+				closeList();
+				const buf = [line];
+				i++;
+				while (i < lines.length && lines[i].trim() !== "" && !/^(```|#{1,6}\s|>\s?|\s*[-*+]\s+|\s*\d+[.)]\s+)/.test(lines[i])) { buf.push(lines[i]); i++; }
+				out.push("<p>" + buf.map((part) => inlineMd(part, dir)).join("<br>") + "</p>");
+			}
+			closeList();
+			return out.join("\n");
+		}
+
+		// ── preview rendering: html → sandboxed iframe ────────────────────────
+		// Relative src/href values are rewritten to the workbench's own asset
+		// route so same-tree css/js/images resolve; absolute http(s), root,
+		// anchor, scheme URLs and any parent traversal are left untouched.
+
+		function htmlPreviewSrc(text, dir) {
+			return text.replace(/(\b(?:src|href)\s*=\s*)(["'])([^"']*)\2/gi, (all, prefix, quote, value) => {
+				if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(value) || value.includes("..")) return all;
+				return prefix + quote + assetUrl(dir === "" ? value : dir + "/" + value) + quote;
+			});
+		}
+
 		// ── File preview ─────────────────────────────────────────────────────
+		/** Document kinds get a 源码 | 预览 switch; everything else stays source. */
+		const PREVIEW_KIND = { md: "markdown", markdown: "markdown", mdx: "markdown", html: "html", htm: "html" };
+
 		function FilePreview(props) {
 			const file = props.file;
 			const kind = classifyFile(file.name);
+			const dot = file.name.lastIndexOf(".");
+			const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : "";
+			const lang = HL_LANG_BY_EXT[ext];
+			const previewKind = PREVIEW_KIND[ext] ?? null;
 			const [state, setState] = useState({ status: "loading", content: "", truncated: false });
+			// Document kinds open on their rendering (the point of previewing a
+			// README or a page); code files open on highlighted source.
+			const [view, setView] = useState(previewKind !== null ? "preview" : "source");
 			useEffect(() => {
 				if (kind !== "text") return;
 				const controller = new AbortController();
@@ -390,6 +871,11 @@ window.__ModuleLoader__.load({
 					});
 				return () => controller.abort();
 			}, [file.path, kind]);
+			// The panel reuses one FilePreview instance across file switches; the
+			// view mode must follow the file, not linger from the previous one.
+			useEffect(() => {
+				setView(previewKind !== null ? "preview" : "source");
+			}, [file.path, previewKind]);
 			// Split mode hides the ← back affordance (the tree stays visible);
 			// narrow full-pane mode keeps it.
 			const back = props.back === false
@@ -402,6 +888,12 @@ window.__ModuleLoader__.load({
 					h("div", { className: "dwb-previewname", title: file.path }, file.name),
 					h("div", { className: "dwb-previewsub" }, subtitle),
 				),
+				previewKind !== null
+					? h("div", { className: "dwb-switch" },
+						h("button", { type: "button", className: "dwb-switchbtn", "data-active": view === "source" || undefined, onClick: () => setView("source") }, "源码"),
+						h("button", { type: "button", className: "dwb-switchbtn", "data-active": view === "preview" || undefined, onClick: () => setView("preview") }, "预览"),
+					)
+					: null,
 				props.back !== false
 					? null
 					: h(TipButton, { tip: "关闭预览", className: "dwb-minibtn", onClick: props.onClose }, closeIcon()),
@@ -413,8 +905,17 @@ window.__ModuleLoader__.load({
 				} else if (state.status === "error") {
 					body = h("div", { className: "dwb-previewnote", "data-error": true }, state.error);
 				} else {
+					const dir = file.path.slice(0, file.path.lastIndexOf("/"));
+					let inner;
+					if (previewKind === "markdown" && view === "preview") {
+						inner = h("div", { className: "dwb-preview-md", dangerouslySetInnerHTML: { __html: renderMarkdown(state.content, dir) } });
+					} else if (previewKind === "html" && view === "preview") {
+						inner = h("iframe", { className: "dwb-preview-frame", sandbox: "allow-scripts", srcDoc: htmlPreviewSrc(state.content, dir), title: file.name });
+					} else {
+						inner = h("pre", { className: "dwb-previewtext", dangerouslySetInnerHTML: { __html: highlightCode(state.content, lang) } });
+					}
 					body = h("div", { className: "dwb-previewscroll" },
-						h("pre", { className: "dwb-previewtext" }, state.content),
+						inner,
 						state.truncated ? h("div", { className: "dwb-note" }, "（文件较大，仅显示前 512KB）") : null,
 					);
 				}
@@ -617,9 +1118,15 @@ window.__ModuleLoader__.load({
 			// The panel lives in the shell.overlay layer (positioned ancestor),
 			// whose parent is the AppFrame grid; its first child is the sidebar
 			// column. window resize and sidebar changes both land here.
+			// Re-measured when the panel opens: while closed the root element
+			// does not exist (rootRef is null), so a mount-only measure would
+			// fall back to the full window width and let the panel cover the
+			// sidebar.
 			useEffect(() => {
 				const measure = () => {
-					const layer = rootRef.current !== null ? rootRef.current.offsetParent : null;
+					const el = rootRef.current;
+					if (el === null) return;
+					const layer = el.offsetParent;
 					const frame = layer !== null ? layer.parentElement : null;
 					const sidebar = frame !== null && frame.firstElementChild !== null ? frame.firstElementChild : null;
 					const sidebarWidth = sidebar !== null ? sidebar.getBoundingClientRect().width : 0;
@@ -629,7 +1136,8 @@ window.__ModuleLoader__.load({
 				measure();
 				window.addEventListener("resize", measure);
 				let observer = null;
-				const layer = rootRef.current !== null ? rootRef.current.offsetParent : null;
+				const el = rootRef.current;
+				const layer = el !== null ? el.offsetParent : null;
 				const frame = layer !== null ? layer.parentElement : null;
 				const sidebar = frame !== null && frame.firstElementChild !== null ? frame.firstElementChild : null;
 				if (sidebar !== null) {
@@ -640,7 +1148,7 @@ window.__ModuleLoader__.load({
 					window.removeEventListener("resize", measure);
 					if (observer !== null) observer.disconnect();
 				};
-			}, []);
+			}, [open]);
 
 			// Keep the panel within the live bound, and FOLLOW the bound when the
 			// panel was already pinned to it (sidebar collapse/expand or window
@@ -976,6 +1484,16 @@ window.__ModuleLoader__.load({
 				"dsh-work: overlay registration",
 			);
 		};
+		// Pure preview helpers exported for the node test suite; the loader
+		// consumes only name/inject/apply, so these stay inert at runtime.
+		exports.escapeHtml = escapeHtml;
+		exports.highlightCode = highlightCode;
+		exports.renderMarkdown = renderMarkdown;
+		exports.htmlPreviewSrc = htmlPreviewSrc;
+		exports.mdLinkHref = mdLinkHref;
+		exports.mdImageHref = mdImageHref;
+		exports.HL_LANG_BY_EXT = HL_LANG_BY_EXT;
+		exports.PREVIEW_KIND = PREVIEW_KIND;
 		return module.exports;
 	},
 });
