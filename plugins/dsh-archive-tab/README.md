@@ -41,7 +41,7 @@ pnpm build     # 修改 src/ 后重新构建 lib/
 在 deepseek-harness checkout 目录执行：
 
 ```sh
-pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-archive-tab
+pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-archive-tab
 ```
 
 该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`

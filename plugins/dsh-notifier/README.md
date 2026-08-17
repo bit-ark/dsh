@@ -39,7 +39,7 @@ if (notifier !== undefined) {
 在 deepseek-harness checkout 目录执行：
 
 ```sh
-pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-notifier
+pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-notifier
 ```
 
 ## 生效方式

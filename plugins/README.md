@@ -3,6 +3,8 @@
 一组可直接共享、独立安装的 DeepSeek Harness Web GUI 插件。每个子目录是一个
 独立 npm 包（`dsh.bundle.patch` 自带组合层），通过本地目录安装进 profile。
 
+> 本文件是插件集细节文档；总览（插件一览表 / 安装 / 构建）见仓库根 [README.md](../README.md)。
+
 ## 插件一览
 
 | 目录 / 包名 | 功能 | 宿主半 | 客户端半 |
@@ -19,12 +21,15 @@
 统一为 `dsh-*` 前缀：文件夹名 == package.json `name` == 宿主半导出 `name` ==
 组合行 id（cordis.patch.yml）== 客户端模块 id。修改任何一处时须同步其余各处。
 
+> 唯一例外：dsh-workbench 因历史原因组合行 id 为 `workbench`（包名仍为
+> `dsh-workbench`）。
+
 ## 安装
 
 在 deepseek-harness checkout 目录执行（每个插件一次）：
 
 ```sh
-pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-<插件名>
+pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-<插件名>
 ```
 
 该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与

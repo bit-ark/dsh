@@ -33,7 +33,7 @@ config:
 纯 JS 插件无需构建。安装（已完成则跳过）：
 
 ```sh
-pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-updater
+pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-updater
 ```
 
 ## 生效方式
