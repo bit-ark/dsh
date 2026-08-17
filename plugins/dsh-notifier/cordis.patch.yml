@@ -1,0 +1,7 @@
+# dsh-notifier bundle layer: one dual-face row. The host Loader imports the
+# package main (node half: minimal placeholder), and client-modules picks up
+# the dsh.client declaration for the browser half (toast + header bell/tray
+# and the `notifier` client service).
+- insert:
+    - id: dsh-notifier
+      name: dsh-notifier

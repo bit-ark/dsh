@@ -1,0 +1,11 @@
+# dsh-deepseek-balance bundle layer: inserts the dsh-deepseek-balance plugin row.
+# Applied when a profile lists this bundle (dsh plugin --profile <name> add).
+# All config keys are optional; defaults shown inline.
+- insert:
+    - id: dsh-deepseek-balance
+      name: dsh-deepseek-balance
+      # config:
+      #   apiKeyEnv: DEEPSEEK_API_KEY        # 每次请求解析的凭据引用（环境变量名）
+      #   balanceBaseURL: https://api.deepseek.com
+      #   usageDays: 14                       # 默认图表窗口（1..90）
+      #   cacheTtlMs: 300000                  # 用量聚合缓存（毫秒）

@@ -1,0 +1,5 @@
+# macOS 杂项
+.DS_Store
+
+# 依赖（各插件目录内安装 esbuild 等）
+node_modules/
