@@ -9,17 +9,21 @@
 - **入口**：侧边栏 footer 的「归档 N」按钮（宽栏显示文字 + 计数，rail 窄栏为圆形
   图标按钮）。当前项目没有归档时按钮隐藏；归档第一个会话后自动出现。
 - **面板**：点击按钮在 footer 上方打开浮动面板，支持 Escape / 点击外部关闭。
+  面板结构：头部（标题 + 关闭）→ 滚动列表 → footer（归档计数提示 + 一键删除）。
 - **列表**：只显示当前项目的已归档会话——归档会话属于当前项目当且仅当它在该项目的
   workspace 记账中，或其存储 cwd 等于项目路径。当前项目解析不依赖打开的会话：
   最近活跃 workspace → 当前会话所属 workspace → 当前会话 cwd 对应的 workspace。
 - **恢复**：把会话从全局归档集合移除（侧边栏「归档会话」的逆操作），会话回到侧边栏原位置。
 - **删除**：硬删除——删除会话日志目录（`~/.dsh/sessions/<项目>/<会话>/`）、解除
   workspace 记账、移出归档集合，并尽力清理投影缓存行。正在运行（live）的会话会被拒绝。
+- **一键删除**：面板底部 footer 区域的按钮，确认后把当前项目全部已归档会话一次性
+  批量硬删除——复用单删的同一套步骤（逐会话），运行中的会话跳过、单个硬错误不中断
+  整批，完成后显示汇总（删除 / 跳过 / 失败计数与失败明细）。
 
 ## 结构
 
 ```
-src/index.ts              宿主半：POST /dsh-archive-tab/restore | /delete
+src/index.ts              宿主半：POST /dsh-archive-tab/restore | /delete | /delete-all
 src/client/index.tsx      客户端半：sidebar.footer.action slot 注册（id: archive-panel）
 build.mjs                 esbuild 构建（lib/index.js + lib/client.js 工厂包装）
 cordis.patch.yml          自带组合层：插入 dsh-archive-tab 行
@@ -51,11 +55,16 @@ pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-archive-ta
 
 ## 删除的步骤顺序（防脏状态）
 
-`/delete` 的步骤刻意排序为：只读校验（live 检查、日志目录定位与目录名守卫）→
-registry 域写入（unarchive → 逐个 workspace detach，单次失败收集警告不中断）→
-最后才 `rm` 删除文件目录 → 尽力清理投影缓存。这样写链 503 或任何校验失败都会在
-任何破坏性操作之前中止，不会出现「文件已删但归档集合还残留」的半删除状态。
-该流程并非跨域事务，仍非原子，但任何失败都停在可恢复状态。
+`/delete` 与 `/delete-all` 共用同一个逐会话删除核心。步骤刻意排序为：只读校验
+（live 检查、日志目录定位与目录名守卫）→ registry 域写入（unarchive → 逐个
+workspace detach，单次失败收集警告不中断）→ 最后才 `rm` 删除文件目录 → 尽力
+清理投影缓存。这样写链 503 或任何校验失败都会在任何破坏性操作之前中止，不会出现
+「文件已删但归档集合还残留」的半删除状态。该流程并非跨域事务，仍非原子，但任何
+失败都停在可恢复状态。
+
+`/delete-all` 在单个会话上的语义与单删一致，但批量语义是「能删多少删多少」：
+live 会话计入跳过（不拒绝整批），其他硬错误计入失败明细并继续处理剩余会话；
+id 列表去重保序、上限 500 个。客户端在调用前先用 `window.confirm` 二次确认。
 
 ## 通用性说明
 

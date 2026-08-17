@@ -28,16 +28,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   buildDayBuckets,
+  costOfSample,
+  DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  sumCost,
   sumSamples,
   totalOf,
   zeroBuckets,
 } from './usage-fold.ts'
-import type { UsageBuckets, UsageSample } from './usage-fold.ts'
+import type { ModelPrice, PriceTable, UsageBuckets, UsageSample } from './usage-fold.ts'
 
 // 重新导出，供独立测试套件从构建后的宿主 bundle 导入纯折叠函数
 // （node test/usage-fold.test.mjs）。
-export { buildDayBuckets, foldSessionUsage, sumSamples, totalOf, zeroBuckets }
+export {
+  buildDayBuckets,
+  costOfSample,
+  DEFAULT_PEAK_HOURS,
+  foldSessionUsage,
+  sumCost,
+  sumSamples,
+  totalOf,
+  zeroBuckets,
+}
 
 /** 插件名：与包名 / 组合行 id / 客户端模块 id 保持一致（dsh-* 前缀）。 */
 export const name = 'dsh-deepseek-balance'
@@ -53,6 +65,17 @@ const DEFAULT_CACHE_TTL_MS = 300_000
 const BALANCE_TIMEOUT_MS = 8_000
 const USAGE_LOAD_CONCURRENCY = 4
 
+/**
+ * 内置默认单价（元 / 百万 tokens，空闲时段基准；高峰 ×2）。
+ * DeepSeek V4 系列 2026-08-17 起峰谷定价：Flash 命中 0.05 / 未命中 1.5 /
+ * 输出 4.5；Pro 命中 0.15 / 未命中 4.5 / 输出 13.5。行配置 pricesPerM 可覆盖。
+ * 其他 provider（如 qwen-token-plan-cn）无默认价——需要时在行配置里补。
+ */
+const DEFAULT_PRICES: PriceTable = {
+  'deepseek-v4-flash': { inputMiss: 1.5, inputHit: 0.05, output: 4.5 },
+  'deepseek-v4-pro': { inputMiss: 4.5, inputHit: 0.15, output: 13.5 },
+}
+
 interface Config {
   /** 凭据引用（环境变量名），指向 DeepSeek API key。 */
   apiKeyEnv?: string
@@ -62,6 +85,21 @@ interface Config {
   usageDays?: number
   /** 用量聚合缓存的存活时长（毫秒）。 */
   cacheTtlMs?: number
+  /**
+   * provider 路由 → API key 名称（凭据引用）的显式映射，覆盖自动探测。
+   * 如 { 'deepseek-official': 'DEEPSEEK_API_KEY', 'qwen-token-plan-cn': 'QWEN_TOKEN_PLAN_CN_API_KEY' }。
+   * 缺省时自动读取 llm-deepseek / llm-pi-ai 的设置命名空间推导。
+   */
+  keyNameByProvider?: Record<string, string>
+  /** 费用显示币种（'CNY' → ¥，'USD' → $）；只影响展示。 */
+  costCurrency?: string
+  /**
+   * 模型单价表（元 / 百万 tokens，空闲基准），合并覆盖内置默认价；
+   * 未配置价格的模型不计费（费用显示为「—」）。
+   */
+  pricesPerM?: Record<string, ModelPrice>
+  /** 高峰时段（北京时间小时 0..23）；落在其中的请求按单价 ×2。默认 09:00–14:00。 */
+  peakHours?: number[]
 }
 
 /** 本插件触及的 harness 服务的最小结构视图。 */
@@ -93,15 +131,31 @@ interface DayBucketWire {
   cacheWrite: number
   total: number
   requests: number
+  /** 该日估算费用（元）；未配置价格表时为 0。 */
+  cost: number
 }
+/** 费用形状：null = 没有可计价样本（未配置价格），0 = 配置了价格但无费用。 */
+type CostWire = number | null
 /** /usage 的成功响应。 */
 interface UsageResult {
   ok: true
   days: DayBucketWire[]
-  totals: UsageBuckets & { total: number }
+  totals: UsageBuckets & { total: number; cost: CostWire }
   allTimeTotal: number
   allTimeRequests: number
+  allTimeCost: CostWire
+  /** 费用展示币种（'CNY' | 'USD'），客户端据此选择符号。 */
+  costCurrency: string
   topSessions: Array<{ sessionId: string; cwdLabel: string; total: number }>
+  /** 按 API key（凭据引用）分组的全量消耗，取 top 5；含模型级细分与费用。 */
+  topKeys: Array<{
+    keyName: string
+    providerIds: string[]
+    models: Array<{ model: string; total: number; requests: number; cost: CostWire }>
+    total: number
+    requests: number
+    cost: CostWire
+  }>
   sessionsScanned: number
   skipped: number
   windowDays: number
@@ -140,12 +194,39 @@ function resolveConfig(config: Config | undefined): {
       // 无法解析的基址保持官方默认。
     }
   }
+  // 价格表：内置默认（V4 Flash/Pro）+ 行配置合并覆盖（配置项优先级更高）。
+  const prices: PriceTable = { ...DEFAULT_PRICES }
+  if (config?.pricesPerM !== undefined && config.pricesPerM !== null && typeof config.pricesPerM === 'object') {
+    for (const [model, price] of Object.entries(config.pricesPerM)) {
+      if (price !== null && typeof price === 'object') {
+        prices[model] = {
+          inputMiss: Number(price.inputMiss) || 0,
+          inputHit: Number(price.inputHit) || 0,
+          output: Number(price.output) || 0,
+        }
+      }
+    }
+  }
+  // 高峰时段：默认 09:00–14:00 北京；只收 0..23 的合法整数小时。
+  const peakHours = Array.isArray(config?.peakHours) && config.peakHours.length > 0
+    ? [...new Set(config.peakHours.map(hour => Math.trunc(Number(hour)))
+      .filter(hour => Number.isFinite(hour) && hour >= 0 && hour <= 23))]
+      .sort((left, right) => left - right)
+    : [...DEFAULT_PEAK_HOURS]
   return {
     apiKeyEnv: nonEmptyString(config?.apiKeyEnv) ? config.apiKeyEnv.trim() : DEFAULT_API_KEY_ENV,
     balanceBaseURL,
     usageDays,
     cacheTtlMs,
+    costCurrency: config?.costCurrency === 'USD' ? 'USD' : 'CNY',
+    prices,
+    peakHours,
   }
+}
+
+/** 两位小数（费用聚合后统一取整，避免浮点噪声累积展示）。 */
+function roundCost(value: number): number {
+  return Math.round(value * 100) / 100
 }
 
 /** 写一个 JSON 响应（禁用缓存）。 */
@@ -248,6 +329,57 @@ function cwdLabelOf(cwd: string | undefined): string {
 }
 
 /**
+ * 解析 provider 路由 → API key 名称（凭据引用）的映射，优先级从低到高：
+ *
+ * 1. 内置默认：`deepseek-official` → `DEEPSEEK_API_KEY`（llm-deepseek 的文档默认）；
+ * 2. settings 服务自动探测：`llm-deepseek` 命名空间的 `apiKeyEnv`、
+ *    `llm-pi-ai` 命名空间 `providers` 字典里每个路由的 `apiKeyEnv`
+ *    （对应 Models 页写入的配置，无需用户手工维护）；
+ * 3. 行配置 `keyNameByProvider` 显式覆盖（兜底一切自动推导不到的 provider）。
+ *
+ * 映射不到的 provider 在聚合时以其路由 id 本身作为 key 名展示。
+ */
+function resolveProviderKeyNames(ctx: any, config: Config | undefined): Map<string, string> {
+  const names = new Map<string, string>()
+  names.set('deepseek-official', DEFAULT_API_KEY_ENV)
+
+  const settings = ctx.get('settings')
+  if (settings !== undefined && typeof settings.get === 'function') {
+    try {
+      const deepseek = settings.get('llm-deepseek')
+      if (deepseek !== undefined && deepseek !== null
+        && typeof (deepseek as { apiKeyEnv?: unknown }).apiKeyEnv === 'string'
+        && nonEmptyString((deepseek as { apiKeyEnv?: string }).apiKeyEnv)) {
+        names.set('deepseek-official', (deepseek as { apiKeyEnv: string }).apiKeyEnv)
+      }
+    } catch {
+      // 命名空间不可读就保持默认；探测失败不能影响聚合主流程。
+    }
+    try {
+      const piAi = settings.get('llm-pi-ai') as { providers?: Record<string, { apiKeyEnv?: string }> } | undefined
+      const providers = piAi?.providers
+      if (providers !== undefined && providers !== null && typeof providers === 'object') {
+        for (const [provider, profile] of Object.entries(providers)) {
+          if (profile !== null && typeof profile === 'object' && nonEmptyString(profile.apiKeyEnv)) {
+            names.set(provider, profile.apiKeyEnv as string)
+          }
+        }
+      }
+    } catch {
+      // 同上：探测失败静默跳过。
+    }
+  }
+
+  if (config?.keyNameByProvider !== undefined && config.keyNameByProvider !== null
+    && typeof config.keyNameByProvider === 'object') {
+    for (const [provider, keyName] of Object.entries(config.keyNameByProvider)) {
+      if (nonEmptyString(keyName)) names.set(provider, keyName)
+    }
+  }
+  return names
+}
+
+/**
  * 全量聚合会话日志用量（单遍）。
  *
  * 并发上限 USAGE_LOAD_CONCURRENCY 的工作线程遍历持久化会话：每个会话 fold 出
@@ -259,13 +391,17 @@ async function computeUsage(
   ctx: any,
   persistence: SessionPersistenceLike,
   days: number,
+  config: Config | undefined,
+  resolved: ReturnType<typeof resolveConfig>,
 ): Promise<UsageResult> {
   const headers = await persistence.list()
   const allSamples: UsageSample[] = []
   const perSession: Array<{ sessionId: string; cwdLabel: string; total: number }> = []
+  const keyNames = resolveProviderKeyNames(ctx, config)
   let skipped = 0
   let allTimeTotal = 0
   let allTimeRequests = 0
+  let pricedSamples = 0
 
   // 有界并发映射：cursor 原子递增分配任务给固定数量的 worker。
   let cursor = 0
@@ -300,29 +436,108 @@ async function computeUsage(
   )
 
   const nowMs = Date.now()
-  const dayBuckets = buildDayBuckets(allSamples, days, nowMs)
+  const dayBuckets = buildDayBuckets(allSamples, days, nowMs, resolved.prices, resolved.peakHours)
 
   // 窗口合计直接由日桶求和：buildDayBuckets 已完成「窗口内/外」的样本归类，
   // 这里累加一次即可，等价于旧实现的二次过滤求和且少一遍日期计算。
   const windowBuckets = zeroBuckets()
   let windowRequests = 0
+  let windowCost = 0
   for (const bucket of dayBuckets) {
     windowBuckets.uncachedInput += bucket.uncachedInput
     windowBuckets.output += bucket.output
     windowBuckets.cacheRead += bucket.cacheRead
     windowBuckets.cacheWrite += bucket.cacheWrite
     windowRequests += bucket.requests
+    windowCost += bucket.cost
   }
 
+  // 全量费用（含窗口外历史）：没有任何可计价样本时为 null（未配置价格）。
+  const allTimeCostRaw = sumCost(allSamples, resolved.prices, resolved.peakHours)
+  const allTimeCost = allTimeCostRaw === undefined ? null : roundCost(allTimeCostRaw)
+
   perSession.sort((left, right) => right.total - left.total)
+
+  // 按 API key 聚合全量消耗：sample.provider 先经 keyNames 映射成凭据引用，
+  // 同一个 key 名下的多个 provider 路由合并成一行（如 deepseek-official 与
+  // 其他共用 DEEPSEEK_API_KEY 的路由）；每个 key 下再按 model 细分，便于
+  // 区分 v4-flash / v4-pro 等模型的实际消耗。
+  const perKey = new Map<string, {
+    keyName: string
+    providers: Set<string>
+    models: Map<string, { total: number; requests: number; cost: number; priced: boolean }>
+    total: number
+    requests: number
+    cost: number
+    priced: boolean
+  }>()
+  for (const sample of allSamples) {
+    const keyName = keyNames.get(sample.provider) ?? sample.provider
+    let entry = perKey.get(keyName)
+    if (entry === undefined) {
+      entry = { keyName, providers: new Set<string>(), models: new Map(), total: 0, requests: 0, cost: 0, priced: false }
+      perKey.set(keyName, entry)
+    }
+    const sampleCost = costOfSample(sample, resolved.prices, resolved.peakHours)
+    if (sampleCost !== undefined) {
+      entry.cost += sampleCost
+      entry.priced = true
+      pricedSamples += 1
+    }
+    entry.providers.add(sample.provider)
+    entry.total += totalOf(sample.buckets)
+    entry.requests += 1
+    const modelTotal = entry.models.get(sample.model)
+    if (modelTotal === undefined) {
+      entry.models.set(sample.model, {
+        total: totalOf(sample.buckets),
+        requests: 1,
+        cost: sampleCost ?? 0,
+        priced: sampleCost !== undefined,
+      })
+    } else {
+      modelTotal.total += totalOf(sample.buckets)
+      modelTotal.requests += 1
+      if (sampleCost !== undefined) {
+        modelTotal.cost += sampleCost
+        modelTotal.priced = true
+      }
+    }
+  }
+  const topKeys = [...perKey.values()]
+    .filter(entry => entry.total > 0)
+    .map(entry => ({
+      keyName: entry.keyName,
+      providerIds: [...entry.providers].sort(),
+      models: [...entry.models.entries()]
+        .map(([model, modelTotal]) => ({
+          model,
+          total: modelTotal.total,
+          requests: modelTotal.requests,
+          cost: modelTotal.priced ? roundCost(modelTotal.cost) : null,
+        }))
+        .sort((left, right) => right.total - left.total),
+      total: entry.total,
+      requests: entry.requests,
+      cost: entry.priced ? roundCost(entry.cost) : null,
+    }))
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 5)
 
   return {
     ok: true,
     days: dayBuckets,
-    totals: { ...windowBuckets, total: totalOf(windowBuckets) },
+    totals: {
+      ...windowBuckets,
+      total: totalOf(windowBuckets),
+      cost: pricedSamples > 0 ? roundCost(windowCost) : null,
+    },
     allTimeTotal,
     allTimeRequests,
+    allTimeCost,
+    costCurrency: resolved.costCurrency,
     topSessions: perSession.filter(entry => entry.total > 0).slice(0, 5),
+    topKeys,
     sessionsScanned: headers.length - skipped,
     skipped,
     windowDays: days,
@@ -348,7 +563,7 @@ export function apply(ctx: any, config: Config | undefined): void {
       return { ...usageCache.result, cached: true }
     }
     if (usageInflight === null) {
-      usageInflight = computeUsage(ctx, ctx.sessionPersistence as SessionPersistenceLike, days)
+      usageInflight = computeUsage(ctx, ctx.sessionPersistence as SessionPersistenceLike, days, config, resolved)
         .then((result) => {
           usageCache = { at: Date.now(), days, result }
           usageInflight = null

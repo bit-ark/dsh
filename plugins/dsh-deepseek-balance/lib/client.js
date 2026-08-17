@@ -73,6 +73,10 @@ function currencySymbol(currency) {
   if (currency === "USD") return "$";
   return `${currency} `;
 }
+function formatCost(value, currency) {
+  if (value === null || value === void 0) return "\u2014";
+  return `${currencySymbol(currency)}${Number.isFinite(value) ? value.toFixed(2) : "0.00"}`;
+}
 var styles = {
   root: {
     height: "100%",
@@ -237,13 +241,28 @@ var styles = {
     color: "var(--dsw-alias-label-tertiary)",
     fontSize: "var(--dsw-font-xxs-12, 12px)"
   },
+  modelRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "2px 0",
+    fontSize: "var(--dsw-font-xxs-12, 12px)",
+    color: "var(--dsw-alias-label-secondary)"
+  },
+  modelName: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap"
+  },
   empty: {
     padding: "16px 0",
     textAlign: "center",
     color: "var(--dsw-alias-label-tertiary)"
   }
 };
-function UsageChart({ days }) {
+function UsageChart({ days, currency }) {
   const max = Math.max(...days.map((day) => day.total), 1);
   const labelEvery = days.length > 16 ? 3 : days.length > 9 ? 2 : 1;
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
@@ -252,7 +271,8 @@ function UsageChart({ days }) {
       const segmentPx = (value) => day.total > 0 && value > 0 ? value / day.total * barPx : 0;
       const tooltip = `${day.date}
 \u672A\u7F13\u5B58\u8F93\u5165 ${formatTokens(day.uncachedInput)} \xB7 \u7F13\u5B58\u8BFB ${formatTokens(day.cacheRead)} \xB7 \u7F13\u5B58\u5199 ${formatTokens(day.cacheWrite)} \xB7 \u8F93\u51FA ${formatTokens(day.output)}
-\u5171 ${formatTokens(day.total)} tokens \xB7 ${String(day.requests)} \u6B21\u8BF7\u6C42`;
+\u5171 ${formatTokens(day.total)} tokens \xB7 ${String(day.requests)} \u6B21\u8BF7\u6C42
+\u4F30\u7B97\u8D39\u7528 ${formatCost(day.cost > 0 ? day.cost : null, currency)}`;
       const showLabel = index % labelEvery === 0 || index === days.length - 1;
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -431,7 +451,7 @@ function BalanceSection(_props) {
         " \u5929\u6CA1\u6709\u6D88\u8017\u8BB0\u5F55"
       ] }, "u-empty"));
     } else {
-      usageBody.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageChart, { days: usage.days }, "u-chart"));
+      usageBody.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsageChart, { days: usage.days, currency: usage.costCurrency }, "u-chart"));
       usageBody.push(
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.totalsRow, children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
@@ -441,7 +461,8 @@ function BalanceSection(_props) {
             formatTokens(usage.totals.total),
             " tokens \xB7 ",
             String(usage.days.reduce((sum, day) => sum + day.requests, 0)),
-            " \u6B21\u8BF7\u6C42"
+            " \u6B21\u8BF7\u6C42 \xB7 \u4F30\u7B97\u8D39\u7528 ",
+            formatCost(usage.totals.cost, usage.costCurrency)
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
             "\u672A\u7F13\u5B58\u8F93\u5165 ",
@@ -459,7 +480,9 @@ function BalanceSection(_props) {
             formatTokens(usage.allTimeTotal),
             " tokens \xB7 ",
             String(usage.allTimeRequests),
-            " \u6B21\u8BF7\u6C42 \uFF08\u626B\u63CF ",
+            " \u6B21\u8BF7\u6C42 \xB7 \u4F30\u7B97\u8D39\u7528 ",
+            formatCost(usage.allTimeCost, usage.costCurrency),
+            "\uFF08\u626B\u63CF ",
             String(usage.sessionsScanned),
             " \u4E2A\u4F1A\u8BDD",
             usage.skipped > 0 ? `\uFF0C\u8DF3\u8FC7 ${String(usage.skipped)} \u4E2A` : "",
@@ -484,25 +507,38 @@ function BalanceSection(_props) {
       usageBody
     ] }, "usage-card")
   );
-  if (!usageLoading && usage !== null && usage.ok === true && usage.topSessions.length > 0) {
+  if (!usageLoading && usage !== null && usage.ok === true && (usage.topKeys?.length ?? 0) > 0) {
     const rows = [];
-    for (const session of usage.topSessions) {
-      const shortId = session.sessionId.replace(/^session-/, "").slice(0, 8);
+    for (const key of usage.topKeys) {
+      const providers = key.providerIds.length > 0 ? key.providerIds.join(" / ") : "(\u672A\u77E5 provider)";
+      const modelLines = (key.models ?? []).map((model) => `${model.model} ${formatTokens(model.total)}\uFF08${String(model.requests)} \u6B21\uFF09\xB7 ${formatCost(model.cost, usage.costCurrency)}`).join("\n");
+      const tooltip = `provider\uFF1A${providers}
+${String(key.requests)} \u6B21\u8BF7\u6C42 \xB7 \u4F30\u7B97\u8D39\u7528 ${formatCost(key.cost, usage.costCurrency)}
+
+\u6A21\u578B\u6D88\u8017\uFF1A
+${modelLines}`;
+      const modelRows = (key.models ?? []).map((model) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.modelRow, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.modelName, title: `${String(model.requests)} \u6B21\u8BF7\u6C42`, children: model.model }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: formatCost(model.cost, usage.costCurrency) })
+      ] }, model.model));
       rows.push(
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.sessionRow, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.sessionName, title: session.sessionId, children: session.cwdLabel }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.sessionId, children: shortId }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: formatTokens(session.total) })
-        ] }, session.sessionId)
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { ...styles.sessionRow, flexDirection: "column", alignItems: "stretch", gap: "2px" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.sessionName, title: tooltip, children: key.keyName }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.sessionId, children: providers }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { title: `${String(key.requests)} \u6B21\u8BF7\u6C42 \xB7 \u4F30\u7B97\u8D39\u7528 ${formatCost(key.cost, usage.costCurrency)}`, children: formatTokens(key.total) })
+          ] }),
+          modelRows.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { paddingLeft: "10px", marginLeft: "2px", borderLeft: "2px solid var(--dsw-alias-border-l1)" }, children: modelRows }) : null
+        ] }, key.keyName)
       );
     }
     children.push(
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.card, children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.cardHeader, children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: styles.cardTitle, children: [
-          "\u6D88\u8017\u6700\u591A\u7684\u4F1A\u8BDD",
+          "\u6D88\u8017\u6700\u591A\u7684 API Key",
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: styles.cardTag, children: [
             "\u5386\u53F2\u603B\u8BA1 Top ",
-            String(usage.topSessions.length)
+            String(usage.topKeys.length)
           ] })
         ] }) }),
         rows
@@ -510,7 +546,7 @@ function BalanceSection(_props) {
     );
   }
   children.push(
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.tiny, children: "\u6CE8\uFF1A\u7EDF\u8BA1\u53EA\u542B\u5DF2\u843D\u76D8\u7684\u4F1A\u8BDD\u65E5\u5FD7\uFF0C\u8FDB\u884C\u4E2D\u7684\u4F1A\u8BDD\u672A\u843D\u76D8\u4E8B\u4EF6\u6682\u4E0D\u8BA1\u5165\uFF1Bfork / \u5B50\u4EE3\u7406\u4F1A\u8BDD\u5DF2\u53BB\u9664\u7EE7\u627F\u7684\u7236\u4F1A\u8BDD\u90E8\u5206\u3002" }, "footnote")
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.tiny, children: "\u6CE8\uFF1A\u7EDF\u8BA1\u53EA\u542B\u5DF2\u843D\u76D8\u7684\u4F1A\u8BDD\u65E5\u5FD7\uFF0C\u8FDB\u884C\u4E2D\u7684\u4F1A\u8BDD\u672A\u843D\u76D8\u4E8B\u4EF6\u6682\u4E0D\u8BA1\u5165\uFF1Bfork / \u5B50\u4EE3\u7406\u4F1A\u8BDD\u5DF2\u53BB\u9664\u7EE7\u627F\u7684\u7236\u4F1A\u8BDD\u90E8\u5206\u3002\u6D88\u8017\u6309\u8BF7\u6C42\u7684 provider \u8DEF\u7531\u5F52\u5C5E\u5230\u5BF9\u5E94 API key\uFF08\u51ED\u636E\u5F15\u7528\u540D\uFF09\uFF0C\u540C\u540D key \u7684\u591A\u4E2A provider \u4F1A\u5408\u5E76\u3002\u8D39\u7528\u4E3A\u4F30\u7B97\uFF1A\u6309 DeepSeek V4 \u5CF0\u8C37\u4EF7\uFF08\u7A7A\u95F2\u4E3A\u57FA\u51C6\u3001\u9AD8\u5CF0 09:00\u201314:00 \u5317\u4EAC \xD72\uFF0C2026-08-17 \u751F\u6548\uFF09\u6298\u7B97\uFF1B\u5386\u53F2\u6D88\u8017\u6309\u73B0\u4EF7\u8FD1\u4F3C\uFF1B\u672A\u914D\u7F6E\u4EF7\u683C\u7684\u6A21\u578B\uFF08\u5982 qwen3.8-max\uFF09\u4E0D\u8BA1\u8D39\uFF08\u663E\u793A \u2014\uFF09\uFF0C\u53EF\u5728\u63D2\u4EF6\u884C\u914D\u7F6E pricesPerM \u8865\u5145\u3002" }, "footnote")
   );
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.root, children });
 }

@@ -15,6 +15,12 @@
  *      的目标）、把会话从每个 workspace 账目上解除、移出归档集合，并尽力清理
  *      投影缓存行。正在运行的（live）会话会被拒绝。
  *
+ *  - POST /dsh-archive-tab/delete-all   { sessionIds: string[] }
+ *      一键批量硬删除：按序对每个 id 执行与 /delete 相同的步骤（共享同一个
+ *      核心函数）。与单删不同，live 会话不会让整批失败——跳过并计入
+ *      skippedLive；其他硬错误（目录名守卫等）计入 failed 且不中断整批，
+ *      逐会话结果随响应返回。上限 500 个 id，去重保序。
+ *
  * 删除顺序（防脏状态的关键）：
  *    1. 只读校验（live 检查、header/locate、目录名守卫、写链探测）；
  *    2. 先做 registry 域写入（unarchive → 逐个 workspace detach，单次失败
@@ -121,6 +127,32 @@ function requireSessionId(body: Record<string, unknown>): string {
 }
 
 /**
+ * 校验并取回 body 中的 sessionIds（批量删除用）。
+ * 必须是数组，至少 1 个、至多 500 个非空字符串；去重保序，防止重复提交
+ * 同一会话导致同一目录被 rm 两次（rm force 幂等，但计数会失真）。
+ */
+function requireSessionIds(body: Record<string, unknown>): string[] {
+  const raw = body.sessionIds
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpError(400, 'sessionIds must be a non-empty array')
+  }
+  if (raw.length > 500) {
+    throw new HttpError(400, 'sessionIds must not exceed 500 entries')
+  }
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const value of raw) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 512) {
+      throw new HttpError(400, 'sessionIds must contain only non-empty strings')
+    }
+    if (seen.has(value)) continue
+    seen.add(value)
+    ids.push(value)
+  }
+  return ids
+}
+
+/**
  * 通过 registry 自身的串行化链，把一个会话 id 从持久归档集合中移除。
  * 幂等：id 本就不在集合中时返回 `changed: false` 且不写盘。
  * 若 id 在集合中但写链不可用（harness API 漂移），抛 503——调用方必须把
@@ -159,16 +191,19 @@ export function apply(ctx: any): void {
       ? 'restore'
       : pathname === '/dsh-archive-tab/delete'
         ? 'delete'
-        : undefined
+        : pathname === '/dsh-archive-tab/delete-all'
+          ? 'delete-all'
+          : undefined
     try {
       if (route === undefined) throw new HttpError(404, `unknown route ${JSON.stringify(pathname)}`)
       if (req.method !== 'POST') throw new HttpError(405, 'method not allowed; use POST')
       const body = await readJsonBody(req)
-      const sessionId = requireSessionId(body)
       if (route === 'restore') {
-        await handleRestore(ctx, sessionId, res)
+        await handleRestore(ctx, requireSessionId(body), res)
+      } else if (route === 'delete') {
+        await handleDelete(ctx, requireSessionId(body), res)
       } else {
-        await handleDelete(ctx, sessionId, res)
+        await handleDeleteAll(ctx, requireSessionIds(body), res)
       }
     } catch (error) {
       if (error instanceof HttpError) {
@@ -200,16 +235,19 @@ async function handleRestore(ctx: any, sessionId: string, res: ServerResponse): 
 }
 
 /**
- * 硬删除一个会话。步骤顺序见文件头注释：先只读校验，再写 registry
- * （unarchive → detach），最后才删文件，以保证任何失败都停在可恢复状态。
+ * 单个会话的硬删除核心步骤（单删 /delete 与批量 /delete-all 共用）。
+ * 步骤顺序见文件头注释：先只读校验，再写 registry（unarchive → detach），
+ * 最后才删文件，以保证任何失败都停在可恢复状态。返回结果字段，硬错误
+ * （目录名守卫等）抛 HttpError，由调用方决定是 500 还是整批继续。
  */
-async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): Promise<void> {
-  // 0. live 检查：正在运行的会话仍绑定 agent 与可能的浏览器面板，拒绝删除。
-  const live = ctx.get('sessions')?.get(sessionId)
-  if (live !== undefined) {
-    throw new HttpError(409, 'session is live in this process; close it before deleting')
-  }
-
+async function deleteSessionCore(ctx: any, sessionId: string): Promise<{
+  removedFiles: boolean
+  detachedWorkspaces: number
+  unarchived: boolean
+  clearedProjectionCache: boolean
+  persisted: boolean
+  detachErrors: string[]
+}> {
   const registry = ctx.workspaceRegistry as RegistryLike
   const headers = (await ctx.sessionPersistence.list()) as SessionHeaderLike[]
   const header = headers.find(candidate => candidate.id === sessionId)
@@ -275,14 +313,65 @@ async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): P
     }
   }
 
-  sendJson(res, 200, {
-    ok: true,
-    sessionId,
+  return {
     removedFiles,
     detachedWorkspaces,
     unarchived,
     clearedProjectionCache,
     persisted: header !== undefined,
     detachErrors,
+  }
+}
+
+/** 单删：live 检查 → 核心步骤 → 200 响应。 */
+async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): Promise<void> {
+  // 0. live 检查：正在运行的会话仍绑定 agent 与可能的浏览器面板，拒绝删除。
+  const live = ctx.get('sessions')?.get(sessionId)
+  if (live !== undefined) {
+    throw new HttpError(409, 'session is live in this process; close it before deleting')
+  }
+
+  const result = await deleteSessionCore(ctx, sessionId)
+  sendJson(res, 200, {
+    ok: true,
+    sessionId,
+    ...result,
+  })
+}
+
+/**
+ * 一键批量硬删除：对每个 id 复用 deleteSessionCore。live 会话跳过并计入
+ * skipped（批量语义：能删多少删多少，不让一个运行中的会话卡死整批）；
+ * 硬错误计入 failed 且不中断整批。响应携带汇总计数与逐会话结果。
+ */
+async function handleDeleteAll(ctx: any, sessionIds: readonly string[], res: ServerResponse): Promise<void> {
+  let deleted = 0
+  let skipped = 0
+  let failed = 0
+  const failures: Array<{ sessionId: string; error: string }> = []
+  for (const sessionId of sessionIds) {
+    const live = ctx.get('sessions')?.get(sessionId)
+    if (live !== undefined) {
+      skipped += 1
+      continue
+    }
+    try {
+      await deleteSessionCore(ctx, sessionId)
+      deleted += 1
+    } catch (error) {
+      failed += 1
+      const message = error instanceof HttpError ? error.message : String(error)
+      failures.push({ sessionId, error: message })
+      ctx.logger.warn(new Error(`archive-tab: batch delete failed for '${sessionId}': ${message}`))
+    }
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    total: sessionIds.length,
+    deleted,
+    skipped,
+    failed,
+    failures,
   })
 }

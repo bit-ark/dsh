@@ -28,11 +28,11 @@ module.exports = __toCommonJS(index_exports);
 var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
 var inject = ["slots", "sessions", "workspaces"];
-async function callHost(endpoint, sessionId) {
+async function callHost(endpoint, body) {
   const response = await fetch(`/dsh-archive-tab/${endpoint}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId })
+    body: JSON.stringify(body)
   });
   let payload;
   try {
@@ -136,6 +136,12 @@ function apply(ctx) {
       .dsh-archive-badge[data-active] {
         background: var(--dsw-alias-interactive-bg-hover);
       }
+      .dsh-archive-close:hover {
+        background: var(--dsw-alias-interactive-bg-hover);
+      }
+      .dsh-archive-batch:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+      }
     `;
     document.head.appendChild(styleEl);
   }
@@ -219,7 +225,7 @@ function apply(ctx) {
       alignItems: "center",
       gap: "8px",
       minHeight: "44px",
-      padding: "10px 12px",
+      padding: "0 12px",
       boxSizing: "border-box",
       borderBottom: "1px solid var(--dsw-alias-border-l2)"
     },
@@ -252,6 +258,52 @@ function apply(ctx) {
       color: "var(--dsw-alias-label-tertiary)",
       fontSize: "14px",
       cursor: "pointer"
+    },
+    batchDelete: {
+      flex: "none",
+      display: "inline-flex",
+      alignItems: "center",
+      height: "24px",
+      padding: "0 12px",
+      boxSizing: "border-box",
+      borderRadius: "6px",
+      border: "1px solid var(--dsw-alias-state-error-primary)",
+      background: "transparent",
+      color: "var(--dsw-alias-state-error-primary)",
+      fontSize: "12px",
+      lineHeight: "1",
+      cursor: "pointer"
+    },
+    footerHint: {
+      flex: 1,
+      minWidth: 0,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      color: "var(--dsw-alias-label-tertiary)",
+      fontSize: "12px",
+      lineHeight: "16px"
+    },
+    panelFooter: {
+      flex: "none",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      minHeight: "44px",
+      padding: "0 12px",
+      boxSizing: "border-box",
+      borderTop: "1px solid var(--dsw-alias-border-l2)"
+    },
+    notice: {
+      padding: "8px 12px",
+      marginBottom: "8px",
+      borderRadius: "8px",
+      border: "1px solid var(--dsw-alias-border-l2)",
+      background: "var(--dsw-alias-bg-base)",
+      color: "var(--dsw-alias-label-primary)",
+      fontSize: "12px",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-all"
     },
     panelBody: {
       flex: 1,
@@ -329,7 +381,9 @@ function apply(ctx) {
     );
     const [open, setOpen] = (0, import_react.useState)(false);
     const [busy, setBusy] = (0, import_react.useState)(null);
+    const [batchBusy, setBatchBusy] = (0, import_react.useState)(false);
     const [error, setError] = (0, import_react.useState)(null);
+    const [notice, setNotice] = (0, import_react.useState)(null);
     const panelRef = (0, import_react.useRef)(null);
     const triggerRef = (0, import_react.useRef)(null);
     const workspace = (0, import_react.useMemo)(() => {
@@ -395,9 +449,10 @@ function apply(ctx) {
     );
     const run = async (action, id) => {
       setError(null);
+      setNotice(null);
       setBusy({ id, action });
       try {
-        await callHost(action, id);
+        await callHost(action, { sessionId: id });
         if (action === "delete") {
           ctx.sessions.refresh?.();
           ctx.workspaces.refresh?.();
@@ -418,6 +473,42 @@ function apply(ctx) {
 \u8FD9\u662F\u786C\u5220\u9664\uFF1A\u4F1A\u8BDD\u7684\u6240\u6709\u6587\u4EF6\u90FD\u4F1A\u88AB\u5220\u9664\uFF0C\u65E0\u6CD5\u6062\u590D\u3002`
       );
       if (confirmed) void run("delete", id);
+    };
+    const deleteAll = () => {
+      if (rows.length === 0) return;
+      const confirmed = window.confirm(
+        `\u786E\u5B9A\u8981\u4E00\u952E\u5220\u9664\u5168\u90E8 ${rows.length} \u4E2A\u5DF2\u5F52\u6863\u4F1A\u8BDD\u5417\uFF1F
+
+\u8FD9\u662F\u786C\u5220\u9664\uFF1A\u6BCF\u4E2A\u4F1A\u8BDD\u7684\u6240\u6709\u6587\u4EF6\u90FD\u4F1A\u88AB\u5220\u9664\uFF0C\u65E0\u6CD5\u6062\u590D\u3002
+\u8FD0\u884C\u4E2D\u7684\u4F1A\u8BDD\u4F1A\u88AB\u8DF3\u8FC7\u3002`
+      );
+      if (!confirmed) return;
+      setError(null);
+      setNotice(null);
+      setBatchBusy(true);
+      void (async () => {
+        try {
+          const payload = await callHost("delete-all", { sessionIds: rows.map((row) => row.id) });
+          const deleted = payload.deleted ?? 0;
+          const skipped = payload.skipped ?? 0;
+          const failed = payload.failed ?? 0;
+          const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`];
+          if (skipped > 0) parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A`);
+          if (failed > 0) parts.push(`\u5931\u8D25 ${failed} \u4E2A`);
+          let message = parts.join("\uFF0C");
+          const failures = payload.failures;
+          if (failures !== void 0 && failures.length > 0) {
+            message += `\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
+          }
+          setNotice(message);
+          ctx.sessions.refresh?.();
+          ctx.workspaces.refresh?.();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBatchBusy(false);
+        }
+      })();
     };
     const openSession = (id) => {
       try {
@@ -444,6 +535,7 @@ function apply(ctx) {
                 "button",
                 {
                   type: "button",
+                  className: "dsh-archive-close",
                   style: styles.close,
                   "aria-label": "\u5173\u95ED",
                   onClick: () => {
@@ -456,9 +548,11 @@ function apply(ctx) {
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.panelBody, children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.hint, children: "\u4EC5\u663E\u793A\u5F53\u524D\u9879\u76EE\u7684\u5F52\u6863\u3002\u4E0B\u8F7D\u4F1A\u5BFC\u51FA\u8BE5\u4F1A\u8BDD\u7684\u65E5\u5FD7 ZIP\uFF1B\u6062\u590D\u4F1A\u628A\u4F1A\u8BDD\u653E\u56DE\u4FA7\u8FB9\u680F\uFF1B\u5220\u9664\u4F1A\u6C38\u4E45\u79FB\u9664\u4F1A\u8BDD\u7684\u5168\u90E8\u6587\u4EF6\uFF0C\u65E0\u6CD5\u6062\u590D\u3002" }),
               error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.error, children: error }) : null,
+              notice !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.notice, children: notice }) : null,
               rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.empty, children: "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" }) : null,
               rows.map((row) => {
                 const rowBusy = busy !== null && busy.id === row.id;
+                const anyBusy = busy !== null || batchBusy;
                 const time = formatTime(row.updatedAt);
                 const dlEntry = downloads?.bySession?.[row.id];
                 const downloading = dlEntry?.status === "downloading";
@@ -483,12 +577,12 @@ function apply(ctx) {
                     {
                       type: "button",
                       title: dlError ?? "\u4E0B\u8F7D\u4F1A\u8BDD\u65E5\u5FD7 (ZIP)",
-                      disabled: busy !== null || downloading,
+                      disabled: anyBusy || downloading,
                       style: {
                         ...styles.buttonBase,
                         border: "1px solid var(--dsw-alias-border-l2)",
                         color: "var(--dsw-alias-label-primary)",
-                        opacity: busy !== null || downloading ? 0.5 : 1
+                        opacity: anyBusy || downloading ? 0.5 : 1
                       },
                       onClick: () => {
                         void downloadSessionLog(row.id);
@@ -500,12 +594,12 @@ function apply(ctx) {
                     "button",
                     {
                       type: "button",
-                      disabled: busy !== null,
+                      disabled: anyBusy,
                       style: {
                         ...styles.buttonBase,
                         border: "1px solid var(--dsw-alias-border-l2)",
                         color: "var(--dsw-alias-label-primary)",
-                        opacity: busy !== null && !rowBusy ? 0.5 : 1
+                        opacity: anyBusy && !rowBusy ? 0.5 : 1
                       },
                       onClick: () => {
                         restore(row.id);
@@ -517,12 +611,12 @@ function apply(ctx) {
                     "button",
                     {
                       type: "button",
-                      disabled: busy !== null,
+                      disabled: anyBusy,
                       style: {
                         ...styles.buttonBase,
                         border: "1px solid var(--dsw-alias-state-error-primary)",
                         color: "var(--dsw-alias-state-error-primary)",
-                        opacity: busy !== null && !rowBusy ? 0.5 : 1
+                        opacity: anyBusy && !rowBusy ? 0.5 : 1
                       },
                       onClick: () => {
                         remove(row.id, row.title);
@@ -532,6 +626,26 @@ function apply(ctx) {
                   )
                 ] }, row.id);
               })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", { style: styles.panelFooter, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.footerHint, children: rows.length === 0 ? "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" : `\u5171 ${rows.length} \u4E2A\u5F52\u6863\u4F1A\u8BDD\uFF08\u8FD0\u884C\u4E2D\u7684\u4F1A\u8DF3\u8FC7\uFF09` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-archive-batch",
+                  style: {
+                    ...styles.batchDelete,
+                    opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1
+                  },
+                  disabled: batchBusy || busy !== null || rows.length === 0,
+                  title: rows.length === 0 ? "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" : `\u4E00\u952E\u5220\u9664\u5F53\u524D\u9879\u76EE\u5168\u90E8 ${rows.length} \u4E2A\u5DF2\u5F52\u6863\u4F1A\u8BDD\uFF08\u8FD0\u884C\u4E2D\u7684\u4F1A\u8DF3\u8FC7\uFF09`,
+                  onClick: () => {
+                    deleteAll();
+                  },
+                  children: batchBusy ? "\u5220\u9664\u4E2D\u2026" : "\u4E00\u952E\u5220\u9664"
+                }
+              )
             ] })
           ]
         }

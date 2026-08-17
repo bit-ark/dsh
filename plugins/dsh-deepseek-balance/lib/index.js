@@ -1,4 +1,30 @@
 // src/usage-fold.ts
+var DEFAULT_PEAK_HOURS = [9, 10, 11, 12, 13];
+var BEIJING_OFFSET_MS = 8 * 36e5;
+function beijingHour(ms) {
+  return new Date(ms + BEIJING_OFFSET_MS).getUTCHours();
+}
+function costOfSample(sample, prices, peakHours) {
+  if (prices === void 0) return void 0;
+  const price = prices[sample.model];
+  if (price === void 0) return void 0;
+  const missTokens = sample.buckets.uncachedInput + sample.buckets.cacheWrite;
+  const base = missTokens / 1e6 * price.inputMiss + sample.buckets.cacheRead / 1e6 * price.inputHit + sample.buckets.output / 1e6 * price.output;
+  const peak = peakHours.includes(beijingHour(sample.time));
+  return base * (peak ? 2 : 1);
+}
+function sumCost(samples, prices, peakHours) {
+  if (prices === void 0) return void 0;
+  let total = 0;
+  let priced = 0;
+  for (const sample of samples) {
+    const cost = costOfSample(sample, prices, peakHours);
+    if (cost === void 0) continue;
+    total += cost;
+    priced += 1;
+  }
+  return priced === 0 ? void 0 : total;
+}
 function count(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
@@ -42,13 +68,24 @@ function bucketsFrom(usage) {
 function foldSessionUsage(header, events) {
   const seed = typeof header.seedLength === "number" && Number.isInteger(header.seedLength) && header.seedLength > 0 ? header.seedLength : 0;
   const byStep = /* @__PURE__ */ new Map();
-  for (let index = seed; index < events.length; index += 1) {
+  let currentProvider = "(unknown)";
+  let currentModel = "(unknown)";
+  for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (event === void 0) continue;
+    if (event.type === "request/header") {
+      const config = event.data?.header?.config;
+      if (typeof config?.provider === "string" && config.provider.length > 0) currentProvider = config.provider;
+      if (typeof config?.model === "string" && config.model.length > 0) currentModel = config.model;
+      continue;
+    }
+    if (index < seed) continue;
     const sample = sampleOf(event);
     if (sample === void 0) continue;
     byStep.set(`${sample.turn}:${sample.step}`, {
       time: typeof event.time === "number" && Number.isFinite(event.time) ? event.time : 0,
+      provider: currentProvider,
+      model: currentModel,
       buckets: bucketsFrom(sample.usage)
     });
   }
@@ -72,7 +109,7 @@ function localDate(ms) {
   const d = new Date(ms);
   return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
 }
-function buildDayBuckets(samples, days, nowMs) {
+function buildDayBuckets(samples, days, nowMs, prices, peakHours = DEFAULT_PEAK_HOURS) {
   const windowDays = Math.max(1, Math.min(90, Math.trunc(Number.isFinite(days) ? days : 14)));
   const today = localDate(nowMs);
   const buckets = [];
@@ -88,7 +125,8 @@ function buildDayBuckets(samples, days, nowMs) {
       cacheRead: 0,
       cacheWrite: 0,
       total: 0,
-      requests: 0
+      requests: 0,
+      cost: 0
     };
     buckets.push(bucket);
     byKey.set(date, bucket);
@@ -103,6 +141,8 @@ function buildDayBuckets(samples, days, nowMs) {
     bucket.cacheRead += sample.buckets.cacheRead;
     bucket.cacheWrite += sample.buckets.cacheWrite;
     bucket.requests += 1;
+    const cost = costOfSample(sample, prices, peakHours);
+    if (cost !== void 0) bucket.cost += cost;
   }
   for (const bucket of buckets) bucket.total = totalOf(bucket);
   return buckets;
@@ -118,6 +158,10 @@ var MAX_USAGE_DAYS = 90;
 var DEFAULT_CACHE_TTL_MS = 3e5;
 var BALANCE_TIMEOUT_MS = 8e3;
 var USAGE_LOAD_CONCURRENCY = 4;
+var DEFAULT_PRICES = {
+  "deepseek-v4-flash": { inputMiss: 1.5, inputHit: 0.05, output: 4.5 },
+  "deepseek-v4-pro": { inputMiss: 4.5, inputHit: 0.15, output: 13.5 }
+};
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -137,12 +181,31 @@ function resolveConfig(config) {
     } catch {
     }
   }
+  const prices = { ...DEFAULT_PRICES };
+  if (config?.pricesPerM !== void 0 && config.pricesPerM !== null && typeof config.pricesPerM === "object") {
+    for (const [model, price] of Object.entries(config.pricesPerM)) {
+      if (price !== null && typeof price === "object") {
+        prices[model] = {
+          inputMiss: Number(price.inputMiss) || 0,
+          inputHit: Number(price.inputHit) || 0,
+          output: Number(price.output) || 0
+        };
+      }
+    }
+  }
+  const peakHours = Array.isArray(config?.peakHours) && config.peakHours.length > 0 ? [...new Set(config.peakHours.map((hour) => Math.trunc(Number(hour))).filter((hour) => Number.isFinite(hour) && hour >= 0 && hour <= 23))].sort((left, right) => left - right) : [...DEFAULT_PEAK_HOURS];
   return {
     apiKeyEnv: nonEmptyString(config?.apiKeyEnv) ? config.apiKeyEnv.trim() : DEFAULT_API_KEY_ENV,
     balanceBaseURL,
     usageDays,
-    cacheTtlMs
+    cacheTtlMs,
+    costCurrency: config?.costCurrency === "USD" ? "USD" : "CNY",
+    prices,
+    peakHours
   };
+}
+function roundCost(value) {
+  return Math.round(value * 100) / 100;
 }
 function sendJson(res, status, value) {
   const body = JSON.stringify(value);
@@ -226,13 +289,47 @@ function cwdLabelOf(cwd) {
   const label = index >= 0 ? cwd.slice(index + 1) : cwd;
   return label === "" ? cwd : label;
 }
-async function computeUsage(ctx, persistence, days) {
+function resolveProviderKeyNames(ctx, config) {
+  const names = /* @__PURE__ */ new Map();
+  names.set("deepseek-official", DEFAULT_API_KEY_ENV);
+  const settings = ctx.get("settings");
+  if (settings !== void 0 && typeof settings.get === "function") {
+    try {
+      const deepseek = settings.get("llm-deepseek");
+      if (deepseek !== void 0 && deepseek !== null && typeof deepseek.apiKeyEnv === "string" && nonEmptyString(deepseek.apiKeyEnv)) {
+        names.set("deepseek-official", deepseek.apiKeyEnv);
+      }
+    } catch {
+    }
+    try {
+      const piAi = settings.get("llm-pi-ai");
+      const providers = piAi?.providers;
+      if (providers !== void 0 && providers !== null && typeof providers === "object") {
+        for (const [provider, profile] of Object.entries(providers)) {
+          if (profile !== null && typeof profile === "object" && nonEmptyString(profile.apiKeyEnv)) {
+            names.set(provider, profile.apiKeyEnv);
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  if (config?.keyNameByProvider !== void 0 && config.keyNameByProvider !== null && typeof config.keyNameByProvider === "object") {
+    for (const [provider, keyName] of Object.entries(config.keyNameByProvider)) {
+      if (nonEmptyString(keyName)) names.set(provider, keyName);
+    }
+  }
+  return names;
+}
+async function computeUsage(ctx, persistence, days, config, resolved) {
   const headers = await persistence.list();
   const allSamples = [];
   const perSession = [];
+  const keyNames = resolveProviderKeyNames(ctx, config);
   let skipped = 0;
   let allTimeTotal = 0;
   let allTimeRequests = 0;
+  let pricedSamples = 0;
   let cursor = 0;
   const worker = async () => {
     for (; ; ) {
@@ -264,24 +361,82 @@ async function computeUsage(ctx, persistence, days) {
     Array.from({ length: Math.min(USAGE_LOAD_CONCURRENCY, Math.max(1, headers.length)) }, () => worker())
   );
   const nowMs = Date.now();
-  const dayBuckets = buildDayBuckets(allSamples, days, nowMs);
+  const dayBuckets = buildDayBuckets(allSamples, days, nowMs, resolved.prices, resolved.peakHours);
   const windowBuckets = zeroBuckets();
   let windowRequests = 0;
+  let windowCost = 0;
   for (const bucket of dayBuckets) {
     windowBuckets.uncachedInput += bucket.uncachedInput;
     windowBuckets.output += bucket.output;
     windowBuckets.cacheRead += bucket.cacheRead;
     windowBuckets.cacheWrite += bucket.cacheWrite;
     windowRequests += bucket.requests;
+    windowCost += bucket.cost;
   }
+  const allTimeCostRaw = sumCost(allSamples, resolved.prices, resolved.peakHours);
+  const allTimeCost = allTimeCostRaw === void 0 ? null : roundCost(allTimeCostRaw);
   perSession.sort((left, right) => right.total - left.total);
+  const perKey = /* @__PURE__ */ new Map();
+  for (const sample of allSamples) {
+    const keyName = keyNames.get(sample.provider) ?? sample.provider;
+    let entry = perKey.get(keyName);
+    if (entry === void 0) {
+      entry = { keyName, providers: /* @__PURE__ */ new Set(), models: /* @__PURE__ */ new Map(), total: 0, requests: 0, cost: 0, priced: false };
+      perKey.set(keyName, entry);
+    }
+    const sampleCost = costOfSample(sample, resolved.prices, resolved.peakHours);
+    if (sampleCost !== void 0) {
+      entry.cost += sampleCost;
+      entry.priced = true;
+      pricedSamples += 1;
+    }
+    entry.providers.add(sample.provider);
+    entry.total += totalOf(sample.buckets);
+    entry.requests += 1;
+    const modelTotal = entry.models.get(sample.model);
+    if (modelTotal === void 0) {
+      entry.models.set(sample.model, {
+        total: totalOf(sample.buckets),
+        requests: 1,
+        cost: sampleCost ?? 0,
+        priced: sampleCost !== void 0
+      });
+    } else {
+      modelTotal.total += totalOf(sample.buckets);
+      modelTotal.requests += 1;
+      if (sampleCost !== void 0) {
+        modelTotal.cost += sampleCost;
+        modelTotal.priced = true;
+      }
+    }
+  }
+  const topKeys = [...perKey.values()].filter((entry) => entry.total > 0).map((entry) => ({
+    keyName: entry.keyName,
+    providerIds: [...entry.providers].sort(),
+    models: [...entry.models.entries()].map(([model, modelTotal]) => ({
+      model,
+      total: modelTotal.total,
+      requests: modelTotal.requests,
+      cost: modelTotal.priced ? roundCost(modelTotal.cost) : null
+    })).sort((left, right) => right.total - left.total),
+    total: entry.total,
+    requests: entry.requests,
+    cost: entry.priced ? roundCost(entry.cost) : null
+  })).sort((left, right) => right.total - left.total).slice(0, 5);
   return {
     ok: true,
     days: dayBuckets,
-    totals: { ...windowBuckets, total: totalOf(windowBuckets) },
+    totals: {
+      ...windowBuckets,
+      total: totalOf(windowBuckets),
+      cost: pricedSamples > 0 ? roundCost(windowCost) : null
+    },
     allTimeTotal,
     allTimeRequests,
+    allTimeCost,
+    costCurrency: resolved.costCurrency,
     topSessions: perSession.filter((entry) => entry.total > 0).slice(0, 5),
+    topKeys,
     sessionsScanned: headers.length - skipped,
     skipped,
     windowDays: days,
@@ -298,7 +453,7 @@ function apply(ctx, config) {
       return { ...usageCache.result, cached: true };
     }
     if (usageInflight === null) {
-      usageInflight = computeUsage(ctx, ctx.sessionPersistence, days).then((result) => {
+      usageInflight = computeUsage(ctx, ctx.sessionPersistence, days, config, resolved).then((result) => {
         usageCache = { at: Date.now(), days, result };
         usageInflight = null;
         return result;
@@ -353,11 +508,14 @@ function apply(ctx, config) {
   );
 }
 export {
+  DEFAULT_PEAK_HOURS,
   apply,
   buildDayBuckets,
+  costOfSample,
   foldSessionUsage,
   inject,
   name,
+  sumCost,
   sumSamples,
   totalOf,
   zeroBuckets

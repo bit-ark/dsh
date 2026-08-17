@@ -25,6 +25,17 @@ export interface UsageBuckets {
 export interface UsageSample {
   /** 提供最终样本的事件的时间戳（Unix epoch 毫秒）。 */
   time: number
+  /**
+   * 产生该样本的 provider 路由（最近一条 `request/header` 的
+   * `config.provider`，如 `deepseek-official`）；日志里没有 header 时为
+   * `'(unknown)'`。这是把样本归属到鉴权 API key 的依据。
+   */
+  provider: string
+  /**
+   * 产生该样本的模型（最近一条 `request/header` 的 `config.model`，
+   * 如 `deepseek-v4-flash`）；没有 header 时为 `'(unknown)'`。
+   */
+  model: string
   buckets: UsageBuckets
 }
 
@@ -51,6 +62,74 @@ export interface DayBucket {
   total: number
   /** 最终样本落在该日的 step 数。 */
   requests: number
+  /** 该日估算费用（元）；未配置价格表时为 0。 */
+  cost: number
+}
+
+/**
+ * 一个模型的单价（元 / 百万 tokens，空闲时段基准；高峰时段按 ×2 计）。
+ * DeepSeek V4 系列 2026-08-17 起峰谷定价；缓存写入按未命中输入价近似。
+ */
+export interface ModelPrice {
+  /** 输入缓存未命中单价。 */
+  inputMiss: number
+  /** 输入缓存命中单价。 */
+  inputHit: number
+  /** 输出单价。 */
+  output: number
+}
+
+/** 模型 id → 单价表（深度解构模型 + 其他 provider）。 */
+export type PriceTable = Record<string, ModelPrice>
+
+/** 高峰时段（北京时间小时，0..23）；DeepSeek V4 官方为每日 09:00–14:00。 */
+export const DEFAULT_PEAK_HOURS = [9, 10, 11, 12, 13] as const
+
+/** 北京时区（UTC+8，中国无夏令时）。 */
+const BEIJING_OFFSET_MS = 8 * 3_600_000
+
+/** 一个时间戳的北京时间小时（0..23）。 */
+function beijingHour(ms: number): number {
+  return new Date(ms + BEIJING_OFFSET_MS).getUTCHours()
+}
+
+/**
+ * 一个样本的估算费用（元）：未缓存输入与缓存写入按「未命中」价、缓存读按
+ * 「命中」价、输出按输出价；落在高峰时段（北京时间）的样本 ×2。
+ * 模型没有价格配置时返回 undefined（不计费，而非 0 元）。
+ */
+export function costOfSample(
+  sample: UsageSample,
+  prices: PriceTable | undefined,
+  peakHours: readonly number[],
+): number | undefined {
+  if (prices === undefined) return undefined
+  const price = prices[sample.model]
+  if (price === undefined) return undefined
+  const missTokens = sample.buckets.uncachedInput + sample.buckets.cacheWrite
+  const base = missTokens / 1_000_000 * price.inputMiss
+    + sample.buckets.cacheRead / 1_000_000 * price.inputHit
+    + sample.buckets.output / 1_000_000 * price.output
+  const peak = peakHours.includes(beijingHour(sample.time))
+  return base * (peak ? 2 : 1)
+}
+
+/** 一组样本的估算费用合计（元）；没有任何样本可计价时返回 undefined。 */
+export function sumCost(
+  samples: readonly UsageSample[],
+  prices: PriceTable | undefined,
+  peakHours: readonly number[],
+): number | undefined {
+  if (prices === undefined) return undefined
+  let total = 0
+  let priced = 0
+  for (const sample of samples) {
+    const cost = costOfSample(sample, prices, peakHours)
+    if (cost === undefined) continue
+    total += cost
+    priced += 1
+  }
+  return priced === 0 ? undefined : total
 }
 
 /** 持久化会话 header 的最小结构视图（不引入 harness 依赖）。 */
@@ -72,6 +151,7 @@ interface EventLike {
     step?: number
     usage?: TokenUsageLike
     chunk?: { type?: string; usage?: TokenUsageLike }
+    header?: { config?: { provider?: string; model?: string } }
     [key: string]: unknown
   }
 }
@@ -157,13 +237,27 @@ export function foldSessionUsage(
 
   // 插入顺序兼作日志顺序；key 对每次 LLM 调用唯一（turn:step）。
   const byStep = new Map<string, UsageSample>()
-  for (let index = seed; index < events.length; index += 1) {
+  let currentProvider = '(unknown)'
+  let currentModel = '(unknown)'
+  for (let index = 0; index < events.length; index += 1) {
     const event = events[index]
     if (event === undefined) continue
+    // 请求头更新当前 provider / model：其后的 usage 样本都属于该路由与模型。
+    // seed 前缀里的 header 也参与跟踪（子会话继承父上下文），但 seed 范围内的
+    // usage 不采纳。
+    if (event.type === 'request/header') {
+      const config = event.data?.header?.config
+      if (typeof config?.provider === 'string' && config.provider.length > 0) currentProvider = config.provider
+      if (typeof config?.model === 'string' && config.model.length > 0) currentModel = config.model
+      continue
+    }
+    if (index < seed) continue
     const sample = sampleOf(event)
     if (sample === undefined) continue
     byStep.set(`${sample.turn}:${sample.step}`, {
       time: typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : 0,
+      provider: currentProvider,
+      model: currentModel,
       buckets: bucketsFrom(sample.usage),
     })
   }
@@ -201,12 +295,15 @@ function localDate(ms: number): { year: number; month: number; day: number } {
 /**
  * 把样本分桶到「到今天为止的最后 `days` 个本地日历日」。
  * 没有活动的日子以零填充，保证图表连续；`days` 钳到 1..90；
- * 窗口外的样本被丢弃。
+ * 窗口外的样本被丢弃。传 `prices` / `peakHours` 时同步累计每日的估算费用
+ * （高峰时段按 ×2；模型无价格配置的样本不计入费用）。
  */
 export function buildDayBuckets(
   samples: readonly UsageSample[],
   days: number,
   nowMs: number,
+  prices?: PriceTable,
+  peakHours: readonly number[] = DEFAULT_PEAK_HOURS,
 ): DayBucket[] {
   const windowDays = Math.max(1, Math.min(90, Math.trunc(Number.isFinite(days) ? days : 14)))
   const today = localDate(nowMs)
@@ -226,6 +323,7 @@ export function buildDayBuckets(
       cacheWrite: 0,
       total: 0,
       requests: 0,
+      cost: 0,
     }
     buckets.push(bucket)
     byKey.set(date, bucket)
@@ -241,6 +339,8 @@ export function buildDayBuckets(
     bucket.cacheRead += sample.buckets.cacheRead
     bucket.cacheWrite += sample.buckets.cacheWrite
     bucket.requests += 1
+    const cost = costOfSample(sample, prices, peakHours)
+    if (cost !== undefined) bucket.cost += cost
   }
   for (const bucket of buckets) bucket.total = totalOf(bucket)
   return buckets

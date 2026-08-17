@@ -10,7 +10,8 @@
  *  - 消耗图：GET /dsh-deepseek-balance/usage —— provider 上报的每日 token
  *    用量堆叠柱状图（未缓存输入 / 缓存读 / 缓存写 / 输出），附窗口合计、
  *    历史总计与绕过宿主缓存的「重新统计」。
- *  - Top 会话：按历史总计最重的 5 个会话。
+ *  - Top API Key：按历史总计消耗最多的 5 个 API key（凭据引用名 + provider +
+ *    模型细分 + token 数）。
  *
  * 数据全部来自本插件自己的宿主路由，不读其他 store。图表是纯 CSS 实现
  * （冻结的浏览器模块表里没有第三方图表库可用），颜色用主题 token，深浅色自动
@@ -40,20 +41,38 @@ interface DayRow {
   cacheWrite: number
   total: number
   requests: number
+  /** 该日估算费用（元）；无价格配置时为 0。 */
+  cost: number
 }
 interface TopSessionRow {
   sessionId: string
   cwdLabel: string
   total: number
 }
+/** 费用形状：null = 未配置价格（不计费），0 = 有价格但无费用。 */
+type CostWire = number | null
+/** 一个 API key（凭据引用）的全量消耗。 */
+interface TopKeyRow {
+  keyName: string
+  /** 消耗归属到该 key 的 provider 路由（如 deepseek-official）。 */
+  providerIds: string[]
+  /** 该 key 下各模型的消耗细分（model ≠ provider：模型如 deepseek-v4-flash）。 */
+  models: Array<{ model: string; total: number; requests: number; cost: CostWire }>
+  total: number
+  requests: number
+  cost: CostWire
+}
 type UsagePayload =
   | {
       ok: true
       days: DayRow[]
-      totals: { uncachedInput: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+      totals: { uncachedInput: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: CostWire }
       allTimeTotal: number
       allTimeRequests: number
+      allTimeCost: CostWire
+      costCurrency: string
       topSessions: TopSessionRow[]
+      topKeys: TopKeyRow[]
       sessionsScanned: number
       skipped: number
       windowDays: number
@@ -124,6 +143,12 @@ function currencySymbol(currency: string): string {
   if (currency === 'CNY') return '¥'
   if (currency === 'USD') return '$'
   return `${currency} `
+}
+
+/** 费用格式化：null（未配置价格）→「—」；否则符号 + 两位小数。 */
+function formatCost(value: CostWire, currency: string): string {
+  if (value === null || value === undefined) return '—'
+  return `${currencySymbol(currency)}${Number.isFinite(value) ? value.toFixed(2) : '0.00'}`
 }
 
 const styles = {
@@ -290,6 +315,21 @@ const styles = {
     color: 'var(--dsw-alias-label-tertiary)',
     fontSize: 'var(--dsw-font-xxs-12, 12px)',
   },
+  modelRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '2px 0',
+    fontSize: 'var(--dsw-font-xxs-12, 12px)',
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  modelName: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   empty: {
     padding: '16px 0',
     textAlign: 'center',
@@ -301,7 +341,7 @@ const styles = {
  * 堆叠柱状图：每根柱高按当日总量比例映射到 CHART_HEIGHT，柱内四个分桶按各自
  * 占比堆叠；柱顶 title 展示完整明细；日期标签按天数稀疏显示。
  */
-function UsageChart({ days }: { days: DayRow[] }): any {
+function UsageChart({ days, currency }: { days: DayRow[]; currency: string }): any {
   const max = Math.max(...days.map(day => day.total), 1)
   const labelEvery = days.length > 16 ? 3 : days.length > 9 ? 2 : 1
   return (
@@ -314,7 +354,8 @@ function UsageChart({ days }: { days: DayRow[] }): any {
           const tooltip = `${day.date}\n`
             + `未缓存输入 ${formatTokens(day.uncachedInput)} · 缓存读 ${formatTokens(day.cacheRead)}`
             + ` · 缓存写 ${formatTokens(day.cacheWrite)} · 输出 ${formatTokens(day.output)}\n`
-            + `共 ${formatTokens(day.total)} tokens · ${String(day.requests)} 次请求`
+            + `共 ${formatTokens(day.total)} tokens · ${String(day.requests)} 次请求\n`
+            + `估算费用 ${formatCost(day.cost > 0 ? day.cost : null, currency)}`
           const showLabel = index % labelEvery === 0 || index === days.length - 1
           return (
             <div key={day.date} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -518,11 +559,11 @@ function BalanceSection(_props: { close?: () => void }): any {
     if (windowEmpty) {
       usageBody.push(<div key="u-empty" style={styles.empty}>最近 {String(usage.windowDays)} 天没有消耗记录</div>)
     } else {
-      usageBody.push(<UsageChart key="u-chart" days={usage.days} />)
+      usageBody.push(<UsageChart key="u-chart" days={usage.days} currency={usage.costCurrency} />)
       usageBody.push(
         <div key="u-totals" style={styles.totalsRow}>
           <div>
-            近 {String(usage.windowDays)} 天合计：{formatTokens(usage.totals.total)} tokens · {String(usage.days.reduce((sum, day) => sum + day.requests, 0))} 次请求
+            近 {String(usage.windowDays)} 天合计：{formatTokens(usage.totals.total)} tokens · {String(usage.days.reduce((sum, day) => sum + day.requests, 0))} 次请求 · 估算费用 {formatCost(usage.totals.cost, usage.costCurrency)}
           </div>
           <div>
             未缓存输入 {formatTokens(usage.totals.uncachedInput)} · 缓存读 {formatTokens(usage.totals.cacheRead)}
@@ -530,7 +571,7 @@ function BalanceSection(_props: { close?: () => void }): any {
             缓存写 {formatTokens(usage.totals.cacheWrite)} · 输出 {formatTokens(usage.totals.output)}
           </div>
           <div>
-            历史总计：{formatTokens(usage.allTimeTotal)} tokens · {String(usage.allTimeRequests)} 次请求
+            历史总计：{formatTokens(usage.allTimeTotal)} tokens · {String(usage.allTimeRequests)} 次请求 · 估算费用 {formatCost(usage.allTimeCost, usage.costCurrency)}
             （扫描 {String(usage.sessionsScanned)} 个会话{usage.skipped > 0 ? `，跳过 ${String(usage.skipped)} 个` : ''}）
           </div>
         </div>,
@@ -555,16 +596,37 @@ function BalanceSection(_props: { close?: () => void }): any {
     </div>,
   )
 
-  // ── Top 会话卡 ──────────────────────────────────────────────────────────
-  if (!usageLoading && usage !== null && usage.ok === true && usage.topSessions.length > 0) {
+  // ── Top API Key 卡 ────────────────────────────────────────────────────────
+  if (!usageLoading && usage !== null && usage.ok === true && (usage.topKeys?.length ?? 0) > 0) {
     const rows: any[] = []
-    for (const session of usage.topSessions) {
-      const shortId = session.sessionId.replace(/^session-/, '').slice(0, 8)
+    for (const key of usage.topKeys) {
+      const providers = key.providerIds.length > 0 ? key.providerIds.join(' / ') : '(未知 provider)'
+      const modelLines = (key.models ?? [])
+        .map(model => `${model.model} ${formatTokens(model.total)}（${String(model.requests)} 次）· ${formatCost(model.cost, usage.costCurrency)}`)
+        .join('\n')
+      const tooltip = `provider：${providers}\n${String(key.requests)} 次请求 · 估算费用 ${formatCost(key.cost, usage.costCurrency)}\n\n模型消耗：\n${modelLines}`
+      const modelRows = (key.models ?? []).map(model => (
+        <div key={model.model} style={styles.modelRow}>
+          <span style={styles.modelName} title={`${String(model.requests)} 次请求`}>{model.model}</span>
+          <span>{formatCost(model.cost, usage.costCurrency)}</span>
+        </div>
+      ))
       rows.push(
-        <div key={session.sessionId} style={styles.sessionRow}>
-          <span style={styles.sessionName} title={session.sessionId}>{session.cwdLabel}</span>
-          <span style={styles.sessionId}>{shortId}</span>
-          <span>{formatTokens(session.total)}</span>
+        <div key={key.keyName} style={{ ...styles.sessionRow, flexDirection: 'column', alignItems: 'stretch', gap: '2px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={styles.sessionName} title={tooltip}>{key.keyName}</span>
+            <span style={styles.sessionId}>{providers}</span>
+            <span title={`${String(key.requests)} 次请求 · 估算费用 ${formatCost(key.cost, usage.costCurrency)}`}>
+              {formatTokens(key.total)}
+            </span>
+          </div>
+          {modelRows.length > 0
+            ? (
+                <div style={{ paddingLeft: '10px', marginLeft: '2px', borderLeft: '2px solid var(--dsw-alias-border-l1)' }}>
+                  {modelRows}
+                </div>
+              )
+            : null}
         </div>,
       )
     }
@@ -572,8 +634,8 @@ function BalanceSection(_props: { close?: () => void }): any {
       <div key="top-card" style={styles.card}>
         <div style={styles.cardHeader}>
           <span style={styles.cardTitle}>
-            消耗最多的会话
-            <span style={styles.cardTag}>历史总计 Top {String(usage.topSessions.length)}</span>
+            消耗最多的 API Key
+            <span style={styles.cardTag}>历史总计 Top {String(usage.topKeys.length)}</span>
           </span>
         </div>
         {rows}
@@ -583,7 +645,7 @@ function BalanceSection(_props: { close?: () => void }): any {
 
   children.push(
     <div key="footnote" style={styles.tiny}>
-      注：统计只含已落盘的会话日志，进行中的会话未落盘事件暂不计入；fork / 子代理会话已去除继承的父会话部分。
+      注：统计只含已落盘的会话日志，进行中的会话未落盘事件暂不计入；fork / 子代理会话已去除继承的父会话部分。消耗按请求的 provider 路由归属到对应 API key（凭据引用名），同名 key 的多个 provider 会合并。费用为估算：按 DeepSeek V4 峰谷价（空闲为基准、高峰 09:00–14:00 北京 ×2，2026-08-17 生效）折算；历史消耗按现价近似；未配置价格的模型（如 qwen3.8-max）不计费（显示 —），可在插件行配置 pricesPerM 补充。
     </div>,
   )
 

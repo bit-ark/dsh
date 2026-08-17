@@ -5,7 +5,10 @@
 import assert from 'node:assert/strict'
 import {
   buildDayBuckets,
+  costOfSample,
+  DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  sumCost,
   sumSamples,
   totalOf,
 } from '../lib/index.js'
@@ -23,6 +26,12 @@ const chunk = (time, turn, step, usage) => ({
   seq: seqCounter++,
   time,
   data: { turn, step, chunk: { type: 'usage', usage } },
+})
+const reqHeader = (time, provider, model = '(none)') => ({
+  type: 'request/header',
+  seq: seqCounter++,
+  time,
+  data: { header: { config: { provider, model } }, reason: 'test' },
 })
 // Local-component timestamps: both samples and the window anchor use the same
 // local calendar math, so the assertions are timezone-independent.
@@ -98,8 +107,8 @@ const header = { id: 'session-test' }
 // ── (e) total = sum of the four disjoint buckets ───────────────────────────────
 {
   const { buckets, total } = sumSamples([
-    { time: NOW, buckets: { uncachedInput: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
-    { time: NOW, buckets: { uncachedInput: 10, output: 20, cacheRead: 30, cacheWrite: 40 } },
+    { time: NOW, provider: 'deepseek-official', model: 'deepseek-v4-flash', buckets: { uncachedInput: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
+    { time: NOW, provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', buckets: { uncachedInput: 10, output: 20, cacheRead: 30, cacheWrite: 40 } },
   ])
   assert.equal(total, 110)
   assert.equal(totalOf(buckets), 110)
@@ -128,9 +137,95 @@ const header = { id: 'session-test' }
 {
   assert.equal(buildDayBuckets([], 200, NOW).length, 90, 'days clamped to 90')
   assert.equal(buildDayBuckets([], 0, NOW).length, 1, 'days clamped to 1')
-  assert.equal(buildDayBuckets([{ time: 0, buckets: { uncachedInput: 5, output: 0, cacheRead: 0, cacheWrite: 0 } }], 14, NOW)
+  assert.equal(buildDayBuckets([{ time: 0, provider: 'deepseek-official', model: 'deepseek-v4-flash', buckets: { uncachedInput: 5, output: 0, cacheRead: 0, cacheWrite: 0 } }], 14, NOW)
     .reduce((sum, bucket) => sum + bucket.total, 0), 0, 'timeless samples are dropped')
   console.log('ok (g) clamping')
+}
+
+// ── (h) provider/model attribution via request/header ──────────────────────────
+{
+  // Header before usage stamps provider + model; a later header switches both.
+  const fold = foldSessionUsage(header, [
+    reqHeader(at(2026, 8, 17, 8), 'deepseek-official', 'deepseek-v4-flash'),
+    msg(at(2026, 8, 17, 9), 1, 1, { inputTokens: 10, outputTokens: 5 }),
+    reqHeader(at(2026, 8, 17, 10), 'qwen-token-plan-cn', 'qwen3.8-max'),
+    msg(at(2026, 8, 17, 11), 1, 2, { inputTokens: 20, outputTokens: 10 }),
+  ])
+  assert.equal(fold.samples.length, 2)
+  assert.equal(fold.samples[0].provider, 'deepseek-official')
+  assert.equal(fold.samples[0].model, 'deepseek-v4-flash')
+  assert.equal(fold.samples[1].provider, 'qwen-token-plan-cn')
+  assert.equal(fold.samples[1].model, 'qwen3.8-max')
+  console.log('ok (h) provider/model switch')
+}
+
+// ── (i) provider fallbacks: no header → unknown; seed inherits parent context ───
+{
+  const noHeader = foldSessionUsage(header, [
+    msg(at(2026, 8, 17, 9), 1, 1, { inputTokens: 1 }),
+  ])
+  assert.equal(noHeader.samples[0].provider, '(unknown)')
+  assert.equal(noHeader.samples[0].model, '(unknown)')
+
+  // Seed range: header events still feed provider/model state, usage is not adopted.
+  const child = foldSessionUsage(
+    { id: 'session-child', seedLength: 2 },
+    [
+      reqHeader(at(2026, 8, 16, 9), 'deepseek-official', 'deepseek-v4-pro'),
+      msg(at(2026, 8, 16, 10), 1, 1, { inputTokens: 999 }),
+      msg(at(2026, 8, 17, 9), 1, 2, { inputTokens: 11 }),
+    ],
+  )
+  assert.equal(child.requests, 1)
+  assert.equal(child.samples[0].provider, 'deepseek-official', 'seed header context inherited')
+  assert.equal(child.samples[0].model, 'deepseek-v4-pro', 'seed header model inherited')
+  assert.deepEqual(child.totals, { uncachedInput: 11, output: 0, cacheRead: 0, cacheWrite: 0 })
+  console.log('ok (i) provider fallbacks')
+}
+
+// ── (j) cost estimation ─────────────────────────────────────────────────────────
+{
+  const prices = {
+    'deepseek-v4-flash': { inputMiss: 1.5, inputHit: 0.05, output: 4.5 },
+  }
+  // 北京 18:00（空闲）与北京 10:00（高峰）——用 UTC 构造，与时区无关。
+  const offPeak = Date.UTC(2026, 7, 17, 10, 0)
+  const peak = Date.UTC(2026, 7, 17, 2, 0)
+  const mk = (time, extra = {}) => ({
+    time,
+    provider: 'deepseek-official',
+    model: 'deepseek-v4-flash',
+    buckets: { uncachedInput: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...extra },
+  })
+
+  // 各 100 万：未命中输入 + 命中 + 输出，空闲 = 1.5 + 0.05 + 4.5 = 6.05。
+  const off = costOfSample(
+    mk(offPeak, { uncachedInput: 1_000_000, cacheRead: 1_000_000, output: 1_000_000 }),
+    prices, DEFAULT_PEAK_HOURS,
+  )
+  assert.ok(off !== undefined && Math.abs(off - 6.05) < 1e-9, `off-peak cost ${String(off)}`)
+  // 高峰 ×2 = 12.1。
+  const on = costOfSample(
+    mk(peak, { uncachedInput: 1_000_000, cacheRead: 1_000_000, output: 1_000_000 }),
+    prices, DEFAULT_PEAK_HOURS,
+  )
+  assert.ok(on !== undefined && Math.abs(on - 12.1) < 1e-9, `peak cost ${String(on)}`)
+  // 缓存写入按未命中价：100 万 → 1.5（空闲）。
+  const write = costOfSample(mk(offPeak, { cacheWrite: 1_000_000 }), prices, DEFAULT_PEAK_HOURS)
+  assert.ok(write !== undefined && Math.abs(write - 1.5) < 1e-9, `cacheWrite cost ${String(write)}`)
+  // 未知模型 / 无价格表 → undefined（不计费而非 0 元）。
+  assert.equal(costOfSample(mk(offPeak), { other: { inputMiss: 1, inputHit: 1, output: 1 } }, DEFAULT_PEAK_HOURS), undefined)
+  assert.equal(costOfSample(mk(offPeak), undefined, DEFAULT_PEAK_HOURS), undefined)
+  assert.equal(sumCost([mk(offPeak)], undefined, DEFAULT_PEAK_HOURS), undefined)
+  // 日桶费用累计（本地同日样本，与测试机器时区无关的两条都落在 08-17）。
+  const daySamples = [
+    mk(new Date(2026, 7, 17, 9).getTime(), { uncachedInput: 1_000_000 }),
+    mk(new Date(2026, 7, 17, 18).getTime(), { output: 1_000_000 }),
+  ]
+  const days = buildDayBuckets(daySamples, 14, NOW, prices, DEFAULT_PEAK_HOURS)
+  const day = days.find(bucket => bucket.date === '2026-08-17')
+  assert.ok(day !== undefined && day.cost > 0, 'day bucket accumulates cost')
+  console.log('ok (j) cost estimation')
 }
 
 console.log('usage-fold tests: all passed')

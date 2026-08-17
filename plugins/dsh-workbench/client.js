@@ -87,7 +87,7 @@ window.__ModuleLoader__.load({
 .dwb-tip { position: fixed; z-index: 100; transform: translate(-50%, -100%); width: max-content; max-width: 50vw; padding: 3px 7px; border-radius: 8px; background: var(--dsw-alias-tooltip-bg); color: var(--dsw-static-neutral-bluish-00); font-size: 12px; line-height: 1.6; white-space: pre-line; overflow-wrap: break-word; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,.18); animation: dwb-tip-in 150ms var(--ds-ease-in-out); }
 @keyframes dwb-tip-in { from { opacity: 0; } }
 .dwb-footer { flex: none; padding: 6px 12px; border-top: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font-size: 11px; }
-.dwb-openbtn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 28px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 8px 0 0 8px; border: 1px solid var(--dsw-alias-border-l2); border-right: none; background: var(--dsw-alias-button-floating-fill); color: var(--dsw-alias-label-secondary); cursor: pointer; box-shadow: -4px 0 12px rgba(0,0,0,.08); }
+.dwb-openbtn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); height: auto; min-height: 44px; padding: 8px 6px; display: flex; align-items: center; justify-content: center; writing-mode: vertical-rl; font-size: 12px; font-weight: 500; line-height: 1.5; border-radius: 8px 0 0 8px; border: 1px solid var(--dsw-alias-border-l2); border-right: none; background: var(--dsw-alias-button-floating-fill); color: var(--dsw-alias-label-secondary); cursor: pointer; box-shadow: -4px 0 12px rgba(0,0,0,.08); }
 .dwb-openbtn:hover { background: var(--dsw-alias-button-floating-hover); color: var(--dsw-alias-label-primary); }
 .dwb-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .dwb-previewheader { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); flex: none; min-width: 0; }
@@ -246,7 +246,6 @@ window.__ModuleLoader__.load({
 			h("path", { d: "M20 4v4h-4" }),
 		);
 		const closeIcon = () => h(IconFrame, null, h("path", { d: "M6 6l12 12M18 6L6 18" }));
-		const panelIcon = () => h(IconFrame, { size: 16 }, h("rect", { x: "3", y: "4", width: "18", height: "16", rx: "2" }), h("path", { d: "M12 4v16" }));
 		const plusIcon = () => h(IconFrame, { size: 12 }, h("path", { d: "M12 5v14M5 12h14" }));
 		const minusIcon = () => h(IconFrame, { size: 12 }, h("path", { d: "M5 12h14" }));
 		const trayDownIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M12 4v10M8 10l4 4 4-4M4 19h16" }));
@@ -579,7 +578,7 @@ window.__ModuleLoader__.load({
 					return row === undefined ? undefined : row.cwd;
 				})
 				: undefined;
-			const [open, setOpen] = useState(true);
+			const [open, setOpen] = useState(false);
 			const [tab, setTab] = useState("files");
 			const [refreshing, setRefreshing] = useState(false);
 			const [root, setRoot] = useState(null);
@@ -878,7 +877,7 @@ window.__ModuleLoader__.load({
 			};
 
 			if (!open) {
-				return h(TipButton, { tip: "展开工作面板", className: "dwb-openbtn", onClick: () => setOpen(true) }, panelIcon());
+				return h(TipButton, { tip: "展开工作面板", className: "dwb-openbtn", onClick: () => setOpen(true) }, "工作面板");
 			}
 
 			const splitMode = selected !== null && width >= SPLIT_MIN;

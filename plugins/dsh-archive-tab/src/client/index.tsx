@@ -16,6 +16,10 @@
  *  - 删除：确认后 POST /dsh-archive-tab/delete——宿主硬删除（持久化工件 +
  *    workspace 账目 + 归档集合）；成功后本页主动刷新 sessions 与 workspaces
  *    列表，让侧边栏立即消失、不残留幽灵条目。
+ *  - 一键删除：面板底部 footer 区域的按钮，确认后 POST
+ *    /dsh-archive-tab/delete-all——把当前项目全部已归档会话一次性批量硬删除
+ *    （宿主侧跳过运行中的会话），成功后同样刷新两个列表并显示汇总
+ *    （删除 / 跳过 / 失败计数与失败明细）。
  *
  * 「当前项目」不依赖任何打开的会话即可解析：最近活跃的 workspace → 持有
  * 当前会话的 workspace 账目 → 当前会话 cwd 对应的 workspace。行数据全部来自
@@ -61,14 +65,14 @@ interface ArchiveRow {
 }
 
 /**
- * 调用宿主端点（restore | delete）。
+ * 调用宿主端点（restore | delete | delete-all）。
  * 成功要求 HTTP 200 且 payload.ok === true，否则抛出可读错误。
  */
-async function callHost(endpoint: 'restore' | 'delete', sessionId: string): Promise<Record<string, unknown>> {
+async function callHost(endpoint: 'restore' | 'delete' | 'delete-all', body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const response = await fetch(`/dsh-archive-tab/${endpoint}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify(body),
   })
   let payload: { ok?: boolean; error?: string } | undefined
   try {
@@ -200,6 +204,12 @@ export function apply(ctx: any): void {
       .dsh-archive-badge[data-active] {
         background: var(--dsw-alias-interactive-bg-hover);
       }
+      .dsh-archive-close:hover {
+        background: var(--dsw-alias-interactive-bg-hover);
+      }
+      .dsh-archive-batch:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+      }
     `
     document.head.appendChild(styleEl)
   }
@@ -284,7 +294,7 @@ export function apply(ctx: any): void {
       alignItems: 'center',
       gap: '8px',
       minHeight: '44px',
-      padding: '10px 12px',
+      padding: '0 12px',
       boxSizing: 'border-box',
       borderBottom: '1px solid var(--dsw-alias-border-l2)',
     },
@@ -317,6 +327,52 @@ export function apply(ctx: any): void {
       color: 'var(--dsw-alias-label-tertiary)',
       fontSize: '14px',
       cursor: 'pointer',
+    },
+    batchDelete: {
+      flex: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+      height: '24px',
+      padding: '0 12px',
+      boxSizing: 'border-box',
+      borderRadius: '6px',
+      border: '1px solid var(--dsw-alias-state-error-primary)',
+      background: 'transparent',
+      color: 'var(--dsw-alias-state-error-primary)',
+      fontSize: '12px',
+      lineHeight: '1',
+      cursor: 'pointer',
+    },
+    footerHint: {
+      flex: 1,
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      color: 'var(--dsw-alias-label-tertiary)',
+      fontSize: '12px',
+      lineHeight: '16px',
+    },
+    panelFooter: {
+      flex: 'none',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      minHeight: '44px',
+      padding: '0 12px',
+      boxSizing: 'border-box',
+      borderTop: '1px solid var(--dsw-alias-border-l2)',
+    },
+    notice: {
+      padding: '8px 12px',
+      marginBottom: '8px',
+      borderRadius: '8px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontSize: '12px',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-all',
     },
     panelBody: {
       flex: 1,
@@ -397,7 +453,9 @@ export function apply(ctx: any): void {
     )
     const [open, setOpen] = useState(false)
     const [busy, setBusy] = useState<{ id: string; action: 'restore' | 'delete' } | null>(null)
+    const [batchBusy, setBatchBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [notice, setNotice] = useState<string | null>(null)
     const panelRef = useRef<HTMLDivElement | null>(null)
     const triggerRef = useRef<HTMLButtonElement | null>(null)
 
@@ -478,9 +536,10 @@ export function apply(ctx: any): void {
     /** 执行恢复 / 删除；失败把可读错误写入面板。 */
     const run = async (action: 'restore' | 'delete', id: string): Promise<void> => {
       setError(null)
+      setNotice(null)
       setBusy({ id, action })
       try {
-        await callHost(action, id)
+        await callHost(action, { sessionId: id })
         if (action === 'delete') {
           // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
           // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
@@ -500,6 +559,48 @@ export function apply(ctx: any): void {
         `确定要永久删除会话「${title}」吗？\n\n这是硬删除：会话的所有文件都会被删除，无法恢复。`,
       )
       if (confirmed) void run('delete', id)
+    }
+    /** 一键删除：把当前项目全部已归档会话一次性硬删除。 */
+    const deleteAll = (): void => {
+      if (rows.length === 0) return
+      const confirmed = window.confirm(
+        `确定要一键删除全部 ${rows.length} 个已归档会话吗？\n\n这是硬删除：每个会话的所有文件都会被删除，无法恢复。\n运行中的会话会被跳过。`,
+      )
+      if (!confirmed) return
+      setError(null)
+      setNotice(null)
+      setBatchBusy(true)
+      void (async () => {
+        try {
+          const payload = await callHost('delete-all', { sessionIds: rows.map(row => row.id) }) as {
+            total?: number
+            deleted?: number
+            skipped?: number
+            failed?: number
+            failures?: Array<{ sessionId: string; error: string }>
+          }
+          const deleted = payload.deleted ?? 0
+          const skipped = payload.skipped ?? 0
+          const failed = payload.failed ?? 0
+          const parts: string[] = [`已删除 ${deleted} 个`]
+          if (skipped > 0) parts.push(`跳过运行中 ${skipped} 个`)
+          if (failed > 0) parts.push(`失败 ${failed} 个`)
+          let message = parts.join('，')
+          const failures = payload.failures
+          if (failures !== undefined && failures.length > 0) {
+            message += `：${failures.map(item => `${item.sessionId}（${item.error}）`).join('；')}`
+          }
+          setNotice(message)
+          // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
+          // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
+          ctx.sessions.refresh?.()
+          ctx.workspaces.refresh?.()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBatchBusy(false)
+        }
+      })()
     }
     const openSession = (id: string): void => {
       try {
@@ -525,6 +626,7 @@ export function apply(ctx: any): void {
                 : null}
               <button
                 type="button"
+                className="dsh-archive-close"
                 style={styles.close}
                 aria-label="关闭"
                 onClick={() => { setOpen(false) }}
@@ -537,11 +639,13 @@ export function apply(ctx: any): void {
                 仅显示当前项目的归档。下载会导出该会话的日志 ZIP；恢复会把会话放回侧边栏；删除会永久移除会话的全部文件，无法恢复。
               </div>
               {error !== null ? <div style={styles.error}>{error}</div> : null}
+              {notice !== null ? <div style={styles.notice}>{notice}</div> : null}
               {rows.length === 0
                 ? <div style={styles.empty}>当前项目没有已归档的会话</div>
                 : null}
               {rows.map(row => {
                 const rowBusy = busy !== null && busy.id === row.id
+                const anyBusy = busy !== null || batchBusy
                 const time = formatTime(row.updatedAt)
                 const dlEntry = downloads?.bySession?.[row.id]
                 const downloading = dlEntry?.status === 'downloading'
@@ -561,12 +665,12 @@ export function apply(ctx: any): void {
                     <button
                       type="button"
                       title={dlError ?? '下载会话日志 (ZIP)'}
-                      disabled={busy !== null || downloading}
+                      disabled={anyBusy || downloading}
                       style={{
                         ...styles.buttonBase,
                         border: '1px solid var(--dsw-alias-border-l2)',
                         color: 'var(--dsw-alias-label-primary)',
-                        opacity: busy !== null || downloading ? 0.5 : 1,
+                        opacity: anyBusy || downloading ? 0.5 : 1,
                       }}
                       onClick={() => { void downloadSessionLog(row.id) }}
                     >
@@ -574,12 +678,12 @@ export function apply(ctx: any): void {
                     </button>
                     <button
                       type="button"
-                      disabled={busy !== null}
+                      disabled={anyBusy}
                       style={{
                         ...styles.buttonBase,
                         border: '1px solid var(--dsw-alias-border-l2)',
                         color: 'var(--dsw-alias-label-primary)',
-                        opacity: busy !== null && !rowBusy ? 0.5 : 1,
+                        opacity: anyBusy && !rowBusy ? 0.5 : 1,
                       }}
                       onClick={() => { restore(row.id) }}
                     >
@@ -587,12 +691,12 @@ export function apply(ctx: any): void {
                     </button>
                     <button
                       type="button"
-                      disabled={busy !== null}
+                      disabled={anyBusy}
                       style={{
                         ...styles.buttonBase,
                         border: '1px solid var(--dsw-alias-state-error-primary)',
                         color: 'var(--dsw-alias-state-error-primary)',
-                        opacity: busy !== null && !rowBusy ? 0.5 : 1,
+                        opacity: anyBusy && !rowBusy ? 0.5 : 1,
                       }}
                       onClick={() => { remove(row.id, row.title) }}
                     >
@@ -602,6 +706,28 @@ export function apply(ctx: any): void {
                 )
               })}
             </div>
+            <footer style={styles.panelFooter}>
+              <span style={styles.footerHint}>
+                {rows.length === 0
+                  ? '当前项目没有已归档的会话'
+                  : `共 ${rows.length} 个归档会话（运行中的会跳过）`}
+              </span>
+              <button
+                type="button"
+                className="dsh-archive-batch"
+                style={{
+                  ...styles.batchDelete,
+                  opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1,
+                }}
+                disabled={batchBusy || busy !== null || rows.length === 0}
+                title={rows.length === 0
+                  ? '当前项目没有已归档的会话'
+                  : `一键删除当前项目全部 ${rows.length} 个已归档会话（运行中的会跳过）`}
+                onClick={() => { deleteAll() }}
+              >
+                {batchBusy ? '删除中…' : '一键删除'}
+              </button>
+            </footer>
           </section>
         )}
         <button

@@ -49,6 +49,26 @@ function requireSessionId(body) {
   }
   return sessionId;
 }
+function requireSessionIds(body) {
+  const raw = body.sessionIds;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpError(400, "sessionIds must be a non-empty array");
+  }
+  if (raw.length > 500) {
+    throw new HttpError(400, "sessionIds must not exceed 500 entries");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const ids = [];
+  for (const value of raw) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+      throw new HttpError(400, "sessionIds must contain only non-empty strings");
+    }
+    if (seen.has(value)) continue;
+    seen.add(value);
+    ids.push(value);
+  }
+  return ids;
+}
 async function unarchiveSession(registry, sessionId) {
   if (!registry.archivedSessionIds.includes(sessionId)) return { changed: false };
   const internals = registry;
@@ -73,16 +93,17 @@ async function unarchiveSession(registry, sessionId) {
 function apply(ctx) {
   const handler = async (req, res) => {
     const pathname = new URL(req.url ?? "/", "http://x").pathname;
-    const route = pathname === "/dsh-archive-tab/restore" ? "restore" : pathname === "/dsh-archive-tab/delete" ? "delete" : void 0;
+    const route = pathname === "/dsh-archive-tab/restore" ? "restore" : pathname === "/dsh-archive-tab/delete" ? "delete" : pathname === "/dsh-archive-tab/delete-all" ? "delete-all" : void 0;
     try {
       if (route === void 0) throw new HttpError(404, `unknown route ${JSON.stringify(pathname)}`);
       if (req.method !== "POST") throw new HttpError(405, "method not allowed; use POST");
       const body = await readJsonBody(req);
-      const sessionId = requireSessionId(body);
       if (route === "restore") {
-        await handleRestore(ctx, sessionId, res);
+        await handleRestore(ctx, requireSessionId(body), res);
+      } else if (route === "delete") {
+        await handleDelete(ctx, requireSessionId(body), res);
       } else {
-        await handleDelete(ctx, sessionId, res);
+        await handleDeleteAll(ctx, requireSessionIds(body), res);
       }
     } catch (error) {
       if (error instanceof HttpError) {
@@ -108,11 +129,7 @@ async function handleRestore(ctx, sessionId, res) {
     archivedSessionIds: [...registry.archivedSessionIds]
   });
 }
-async function handleDelete(ctx, sessionId, res) {
-  const live = ctx.get("sessions")?.get(sessionId);
-  if (live !== void 0) {
-    throw new HttpError(409, "session is live in this process; close it before deleting");
-  }
+async function deleteSessionCore(ctx, sessionId) {
   const registry = ctx.workspaceRegistry;
   const headers = await ctx.sessionPersistence.list();
   const header = headers.find((candidate) => candidate.id === sessionId);
@@ -160,15 +177,55 @@ async function handleDelete(ctx, sessionId, res) {
       ctx.logger.warn(new Error(`archive-tab: projection-cache cleanup failed for '${sessionId}': ${String(error)}`));
     }
   }
-  sendJson(res, 200, {
-    ok: true,
-    sessionId,
+  return {
     removedFiles,
     detachedWorkspaces,
     unarchived,
     clearedProjectionCache,
     persisted: header !== void 0,
     detachErrors
+  };
+}
+async function handleDelete(ctx, sessionId, res) {
+  const live = ctx.get("sessions")?.get(sessionId);
+  if (live !== void 0) {
+    throw new HttpError(409, "session is live in this process; close it before deleting");
+  }
+  const result = await deleteSessionCore(ctx, sessionId);
+  sendJson(res, 200, {
+    ok: true,
+    sessionId,
+    ...result
+  });
+}
+async function handleDeleteAll(ctx, sessionIds, res) {
+  let deleted = 0;
+  let skipped = 0;
+  let failed = 0;
+  const failures = [];
+  for (const sessionId of sessionIds) {
+    const live = ctx.get("sessions")?.get(sessionId);
+    if (live !== void 0) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      await deleteSessionCore(ctx, sessionId);
+      deleted += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof HttpError ? error.message : String(error);
+      failures.push({ sessionId, error: message });
+      ctx.logger.warn(new Error(`archive-tab: batch delete failed for '${sessionId}': ${message}`));
+    }
+  }
+  sendJson(res, 200, {
+    ok: true,
+    total: sessionIds.length,
+    deleted,
+    skipped,
+    failed,
+    failures
   });
 }
 export {
