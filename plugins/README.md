@@ -12,6 +12,7 @@
 | `dsh-notifier` | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
 | `dsh-updater` | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
 | `dsh-local-plugin-manager` | 本地插件管理器：设置-插件「本地插件」tab（列出 / 添加 / 移除 / 启用 / 禁用） | /local-plugins/list \| add \| remove \| set-enabled | settings.plugins.tab（本地插件页） |
+| `dsh-workbench` | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
 
 ## 命名约定
 
@@ -35,7 +36,8 @@ pnpm dsh plugin --profile web add /Users/dl/DL/github/dsh/plugins/dsh-<插件名
 - TypeScript 插件（dsh-archive-tab、dsh-deepseek-balance）：`pnpm install`
   后 `pnpm build` 生成 `lib/`（已随仓库提交，link: 安装开箱即用）；
   deepseek-balance 另可 `pnpm test` 跑纯折叠断言。
-- 纯 JS 插件（dsh-notifier、dsh-updater、dsh-local-plugin-manager）：无需构建。
+- 纯 JS 插件（dsh-notifier、dsh-updater、dsh-local-plugin-manager、dsh-workbench）：
+  无需构建；dsh-workbench 另可 `pnpm test` 跑文件分类 / MIME 映射纯逻辑断言。
 
 ## 生效方式
 

@@ -1,0 +1,29 @@
+{
+  "name": "dsh-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Right-docked workbench panel: file/dir tree with icons and click-to-preview (text/image/audio/video), plus git commit graph and basic git operations (stage/commit/ignore/init)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node test/classify.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
