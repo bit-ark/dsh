@@ -39,7 +39,7 @@ import {
   totalOf,
   zeroBuckets,
 } from './usage-fold.ts'
-import type { ModelPrice, PriceTable, UsageBuckets, UsageSample } from './usage-fold.ts'
+import type { ModelPrice, PriceTable, UsageBuckets, UsageSample, EventLike } from './usage-fold.ts'
 
 // 重新导出，供独立测试套件从构建后的宿主 bundle 导入纯折叠函数
 // （node test/usage-fold.test.mjs）。
@@ -423,9 +423,9 @@ async function computeUsage(
         const inspection = await persistence.load(header.id)
         const fold = foldSessionUsage(
           { id: header.id, cwd: header.cwd, seedLength: header.seedLength },
-          // persistence.load 的事件是运行时域对象数组，这里只按最小形状
-          // （type/time/data）消费，用双断言避免类型系统纠缠。
-          inspection.events as unknown as readonly never[],
+          // persistence.load 的事件是运行时域对象数组，这里按 EventLike
+          // 的最小形状（type/time/data）消费，双断言避免类型系统纠缠。
+          inspection.events as unknown as readonly EventLike[],
         )
         allSamples.push(...fold.samples)
         allTimeTotal += totalOf(fold.totals)
@@ -601,7 +601,9 @@ export function apply(ctx: any, config: Config | undefined): void {
     const url = new URL(req.url ?? '/', 'http://x')
     const pathname = url.pathname
     try {
-      if (req.method !== 'GET') {
+      // GET 与 HEAD 都允许：HEAD 是纯只读探测（如客户端确认端点可用性），
+      // 语义与 GET 相同但不回传 body。
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
         sendJson(res, 405, { ok: false, code: 'method-not-allowed', message: 'method not allowed; use GET' })
         return
       }

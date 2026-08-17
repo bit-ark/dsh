@@ -228,4 +228,62 @@ const header = { id: 'session-test' }
   console.log('ok (j) cost estimation')
 }
 
+// ── (k) 无效时间戳：折叠时即排除，全量与图表口径一致 ────────────────────────
+{
+  // time <= 0 的样本在 foldSessionUsage 里被丢弃：它进不了 allTime 合计，
+  // 也进不了 buildDayBuckets（图表），避免同一批数据两套口径互相矛盾。
+  const fold = foldSessionUsage(header, [
+    msg(0, 1, 1, { inputTokens: 999 }),
+    chunk(1_700_000_000_000, 1, 2, { outputTokens: 5 }),
+  ])
+  assert.equal(fold.requests, 1, 'time<=0 样本不计数')
+  assert.equal(fold.samples.length, 1, 'time<=0 样本不出现在样本集')
+  assert.equal(fold.totals.output, 5)
+  console.log('ok (k) invalid timestamps excluded at fold')
+}
+
+// ── (l) 月/年边界分桶 ────────────────────────────────────────────────────────
+{
+  // 窗口横跨月边界（7 月末 → 8 月初）时，桶仍按本地日历日正确归位，
+  // 且零填充天数与窗口长度一致（14 个桶）。
+  const monthEdge = buildDayBuckets([
+    { time: new Date(2026, 6, 31, 23).getTime(), provider: 'p', model: 'm', buckets: { uncachedInput: 1, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { time: new Date(2026, 7, 1, 0).getTime(), provider: 'p', model: 'm', buckets: { uncachedInput: 2, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  ], 14, new Date(2026, 7, 10, 12).getTime())
+  assert.equal(monthEdge.length, 14, '窗口恒为 14 桶')
+  const lastDay = monthEdge[monthEdge.length - 1]
+  assert.equal(lastDay.date, '2026-08-10')
+  assert.equal(lastDay.uncachedInput, 0)
+  const jul31 = monthEdge.find(bucket => bucket.date === '2026-07-31')
+  const aug1 = monthEdge.find(bucket => bucket.date === '2026-08-01')
+  assert.equal(jul31?.uncachedInput, 1, '7/31 样本落在 7/31 桶')
+  assert.equal(aug1?.uncachedInput, 2, '8/1 样本落在 8/1 桶（跨月不串桶）')
+  console.log('ok (l) month/year boundary bucketing')
+}
+
+// ── (m) days 边界与 NaN/Infinity ─────────────────────────────────────────────
+{
+  const s = { time: new Date(2026, 7, 17, 9).getTime(), provider: 'p', model: 'm', buckets: { uncachedInput: 1, output: 0, cacheRead: 0, cacheWrite: 0 } }
+  assert.equal(buildDayBuckets([s], 1, NOW).length, 1, 'days=1 单桶')
+  assert.equal(buildDayBuckets([s], 0, NOW).length, 1, 'days=0 钳到 1')
+  assert.equal(buildDayBuckets([s], 999, NOW).length, 90, 'days>90 钳到 90')
+  assert.equal(buildDayBuckets([s], Number.NaN, NOW).length, 14, 'NaN days 回退默认 14')
+  assert.equal(buildDayBuckets([s], Number.POSITIVE_INFINITY, NOW).length, 14, 'Infinity days 视为非法回退默认 14')
+  assert.equal(buildDayBuckets([s], -5, NOW).length, 1, '负 days 钳到 1')
+  console.log('ok (m) days bounds and non-finite clamping')
+}
+
+// ── (n) message-after-chunk 乱序：last-wins 按事件顺序（文档化行为）──────────
+{
+  // provider 契约里 message 是终端样本；若一条 chunk 在其所属 message 之后
+  // 重放，last-wins 会以 chunk 为准——这是按事件顺序去重的既定语义，不是
+  // 类型仲裁。断言实际行为，防止未来改动悄悄改变它。
+  const fold = foldSessionUsage(header, [
+    msg(1_700_000_000_000, 2, 1, { outputTokens: 100 }),
+    chunk(1_700_000_000_001, 2, 1, { outputTokens: 7 }),
+  ])
+  assert.equal(fold.totals.output, 7, '同 (turn,step) 后到者胜')
+  console.log('ok (n) last-wins by event order (documented)')
+}
+
 console.log('usage-fold tests: all passed')

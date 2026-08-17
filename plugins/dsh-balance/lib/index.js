@@ -346,8 +346,8 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
         const inspection = await persistence.load(header.id);
         const fold = foldSessionUsage(
           { id: header.id, cwd: header.cwd, seedLength: header.seedLength },
-          // persistence.load 的事件是运行时域对象数组，这里只按最小形状
-          // （type/time/data）消费，用双断言避免类型系统纠缠。
+          // persistence.load 的事件是运行时域对象数组，这里按 EventLike
+          // 的最小形状（type/time/data）消费，双断言避免类型系统纠缠。
           inspection.events
         );
         allSamples.push(...fold.samples);
@@ -479,7 +479,7 @@ function apply(ctx, config) {
     const url = new URL(req.url ?? "/", "http://x");
     const pathname = url.pathname;
     try {
-      if (req.method !== "GET") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
         sendJson(res, 405, { ok: false, code: "method-not-allowed", message: "method not allowed; use GET" });
         return;
       }

@@ -143,8 +143,8 @@ export interface SessionHeaderLike {
   seedLength?: number
 }
 
-/** 一个持久化会话事件的最小结构视图。 */
-interface EventLike {
+/** 一个持久化会话事件的最小结构视图（导出：宿主半折叠时做类型断言用）。 */
+export interface EventLike {
   type: string
   seq: number
   time: number
