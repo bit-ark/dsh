@@ -177,6 +177,11 @@ function exportUrl(sessionId: string): string {
  * 先 HEAD 探测可用性，再用 <a download> 触发 GET 下载；状态写入私有 store。
  * downloadInflight 做同步去重：同一会话的第二次点击（渲染禁用生效前）
  * 直接忽略，避免双发 HEAD+GET。
+ *
+ * 已知限制：<a download> 触发的是浏览器原生下载，无法回读 GET 结果——HEAD
+ * 通过但 GET 期间失败（如会话恰在两步之间被删）时，浏览器会把错误体存成
+ * .zip 且 UI 已标记成功。与 harness 自带 session-log-download 控制器同款
+ * 行为（平台级限制），故不做二次校验。
  */
 async function downloadSessionLog(sessionId: string): Promise<void> {
   if (downloadInflight.has(sessionId)) return

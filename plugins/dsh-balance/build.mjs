@@ -4,19 +4,25 @@
  * 两个产物：
  *  - lib/index.js   — 宿主半（纯 ESM / Node；@deepseek-ai/* 保持 external，
  *                     加载时通过 profile 的模块链解析）。
- *  - lib/client.js  — 客户端半，浏览器工厂 bundle，经 /plugins/dsh-deepseek-
- *                     balance/client.js 提供。格式与 harness 自带客户端
- *                     bundle 一致（packages/client/tsdown.client.ts）：CJS
- *                     主体包在 window.__ModuleLoader__.load({id, factory})
- *                     里，external 通过注入的 require（模块表）解析。
+ *  - lib/client.js  — 客户端半，浏览器工厂 bundle，经 /plugins/dsh-balance/
+ *                     client.js 提供。格式与 harness 自带客户端 bundle 一致
+ *                     （packages/client/tsdown.client.ts）：CJS 主体包在
+ *                     window.__ModuleLoader__.load({id, factory}) 里，
+ *                     external 通过注入的 require（模块表）解析。
  */
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { mkdir, rm } from 'node:fs/promises'
 
 const root = dirname(fileURLToPath(import.meta.url))
 // 客户端模块 id：必须等于包名（client-modules 契约），与行 id 保持一致。
 const PACKAGE_ID = 'dsh-balance'
+
+// 构建前清空 lib/ 再重建：入口改名/删除后旧 .js/.map 若残留会被误发布
+// （link: 安装直接消费 lib/，陈旧产物会导致行为与源码不一致）。
+await rm(join(root, 'lib'), { recursive: true, force: true })
+await mkdir(join(root, 'lib'), { recursive: true })
 
 /** web shell 共享进冻结浏览器模块表的模块说明符（external 白名单）。 */
 const PLATFORM_MODULES = [
