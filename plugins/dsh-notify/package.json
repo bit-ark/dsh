@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-notify",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generic in-app notifications: top toast + session-header bell with tray, provided as the notifier client service",
   "type": "module",
   "main": "index.js",
