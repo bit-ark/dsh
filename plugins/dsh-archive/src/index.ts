@@ -13,13 +13,18 @@
  *  - POST /dsh-archive/delete   { sessionId }
  *      硬删除：移除会话的持久化工件目录（`sessionPersistence.locate()` 指向
  *      的目标）、把会话从每个 workspace 账目上解除、移出归档集合，并尽力清理
- *      投影缓存行。正在运行的（live）会话会被拒绝。
+ *      投影缓存行。正在运行的（live）会话会被拒绝（409，中文提示）。
+ *
+ *      「live」= 会话对象仍挂在进程内存的 SessionStore 里：归档只隐藏列表，
+ *      不结束会话，且 harness 没有公开的强制结束会话 API（UI 的停止/关闭
+ *      都只是取消当前 turn）——会话会一直 live 到 dsh web 进程重启为止。
+ *      因此删除被拒绝时提示用户重启后重试，而不是尝试私有链强杀。
  *
  *  - POST /dsh-archive/delete-all   { sessionIds: string[] }
  *      一键批量硬删除：按序对每个 id 执行与 /delete 相同的步骤（共享同一个
  *      核心函数）。与单删不同，live 会话不会让整批失败——跳过并计入
- *      skippedLive；其他硬错误（目录名守卫等）计入 failed 且不中断整批，
- *      逐会话结果随响应返回。上限 500 个 id，去重保序。
+ *      skipped（id 随 skippedIds 返回）；其他硬错误（目录名守卫等）计入
+ *      failed 且不中断整批，逐会话结果随响应返回。上限 500 个 id，去重保序。
  *
  * 删除顺序（防脏状态的关键）：
  *    1. 只读校验（live 检查、header/locate、目录名守卫、写链探测）；
@@ -100,7 +105,7 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
         // 销毁请求流会连带撕掉同一个 socket，后面的 sendJson 写 413 会因
         // ERR_STREAM_DESTROYED 落空（客户端只看到连接被掐断）。不再收
         // 后续 chunk（settled 守卫），让响应正常写完、连接自然关闭即可。
-        fail(new HttpError(413, 'request body too large'))
+        fail(new HttpError(413, '请求体过大（上限 1MB）'))
         return
       }
       chunks.push(chunk)
@@ -112,10 +117,10 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
         const text = Buffer.concat(chunks).toString('utf8')
         resolve(text === '' ? {} : JSON.parse(text) as Record<string, unknown>)
       } catch {
-        reject(new HttpError(400, 'request body is not valid JSON'))
+        reject(new HttpError(400, '请求体不是合法的 JSON'))
       }
     })
-    req.on('error', () => fail(new HttpError(400, 'request stream failed')))
+    req.on('error', () => fail(new HttpError(400, '请求流读取失败')))
   })
 }
 
@@ -133,7 +138,7 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
 function requireSessionId(body: Record<string, unknown>): string {
   const sessionId = body.sessionId
   if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 512) {
-    throw new HttpError(400, 'sessionId must be a non-empty string')
+    throw new HttpError(400, 'sessionId 必须是非空字符串')
   }
   return sessionId
 }
@@ -146,16 +151,16 @@ function requireSessionId(body: Record<string, unknown>): string {
 function requireSessionIds(body: Record<string, unknown>): string[] {
   const raw = body.sessionIds
   if (!Array.isArray(raw) || raw.length === 0) {
-    throw new HttpError(400, 'sessionIds must be a non-empty array')
+    throw new HttpError(400, 'sessionIds 必须是非空数组')
   }
   if (raw.length > 500) {
-    throw new HttpError(400, 'sessionIds must not exceed 500 entries')
+    throw new HttpError(400, 'sessionIds 最多 500 项')
   }
   const seen = new Set<string>()
   const ids: string[] = []
   for (const value of raw) {
     if (typeof value !== 'string' || value.length === 0 || value.length > 512) {
-      throw new HttpError(400, 'sessionIds must contain only non-empty strings')
+      throw new HttpError(400, 'sessionIds 只能包含非空字符串')
     }
     if (seen.has(value)) continue
     seen.add(value)
@@ -180,7 +185,7 @@ async function unarchiveSession(registry: RegistryLike, sessionId: string): Prom
   ) {
     throw new HttpError(
       503,
-      'workspace registry write chain is unavailable (harness API drift); restore is disabled until this plugin is updated',
+      'workspace registry 写链不可用（harness API 漂移）；恢复/删除已停用，请更新本插件',
     )
   }
   let changed = false
@@ -207,13 +212,13 @@ export function apply(ctx: any): void {
           ? 'delete-all'
           : undefined
     try {
-      if (route === undefined) throw new HttpError(404, `unknown route ${JSON.stringify(pathname)}`)
-      if (req.method !== 'POST') throw new HttpError(405, 'method not allowed; use POST')
+      if (route === undefined) throw new HttpError(404, `未知路由 ${JSON.stringify(pathname)}`)
+      if (req.method !== 'POST') throw new HttpError(405, '仅支持 POST 方法')
       // CSRF 围栏：与 harness /api 面同款约定——只收 application/json。
       // 浏览器对 text/plain 等「简单请求」不做 CORS 预检，恶意页面可跨站
       // 盲发破坏性 POST（这里会 rm 会话目录），按内容类型拒掉。
       const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
-      if (mediaType !== 'application/json') throw new HttpError(415, 'content type must be application/json')
+      if (mediaType !== 'application/json') throw new HttpError(415, 'content-type 必须是 application/json')
       const body = await readJsonBody(req)
       if (route === 'restore') {
         await handleRestore(ctx, requireSessionId(body), res)
@@ -228,7 +233,7 @@ export function apply(ctx: any): void {
         return
       }
       ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-      sendJson(res, 500, { ok: false, error: 'internal error' })
+      sendJson(res, 500, { ok: false, error: '内部错误' })
     }
   }
 
@@ -280,7 +285,7 @@ async function deleteSessionCore(ctx: any, sessionId: string): Promise<{
       const dir = dirname(location.path)
       const dirName = basename(dir)
       if (dirName !== sessionId && dirName !== encodeURIComponent(sessionId)) {
-        throw new HttpError(500, `refusing to remove unexpected session directory ${JSON.stringify(dir)}`)
+        throw new HttpError(500, `拒绝删除意外的会话目录 ${JSON.stringify(dir)}`)
       }
       targetDir = dir
     }
@@ -311,7 +316,7 @@ async function deleteSessionCore(ctx: any, sessionId: string): Promise<{
   if (targetDir !== null) {
     const dirName = basename(targetDir)
     if (dirName !== sessionId && dirName !== encodeURIComponent(sessionId)) {
-      throw new HttpError(500, `refusing to remove unexpected session directory ${JSON.stringify(targetDir)}`)
+      throw new HttpError(500, `拒绝删除意外的会话目录 ${JSON.stringify(targetDir)}`)
     }
     await rm(targetDir, { recursive: true, force: true })
     removedFiles = true
@@ -345,7 +350,10 @@ async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): P
   // 0. live 检查：正在运行的会话仍绑定 agent 与可能的浏览器面板，拒绝删除。
   const live = ctx.get('sessions')?.get(sessionId)
   if (live !== undefined) {
-    throw new HttpError(409, 'session is live in this process; close it before deleting')
+    throw new HttpError(
+      409,
+      '该会话仍在进程中运行，无法删除。归档不会结束会话——会话会一直存活到 dsh web 重启为止；请重启 dsh web 后再删除',
+    )
   }
 
   const result = await deleteSessionCore(ctx, sessionId)
@@ -359,17 +367,20 @@ async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): P
 /**
  * 一键批量硬删除：对每个 id 复用 deleteSessionCore。live 会话跳过并计入
  * skipped（批量语义：能删多少删多少，不让一个运行中的会话卡死整批）；
- * 硬错误计入 failed 且不中断整批。响应携带汇总计数与逐会话结果。
+ * 硬错误计入 failed 且不中断整批。响应携带汇总计数、被跳过（live）会话的
+ * id 列表与逐会话失败明细，让客户端能给出完整提示。
  */
 async function handleDeleteAll(ctx: any, sessionIds: readonly string[], res: ServerResponse): Promise<void> {
   let deleted = 0
   let skipped = 0
   let failed = 0
+  const skippedIds: string[] = []
   const failures: Array<{ sessionId: string; error: string }> = []
   for (const sessionId of sessionIds) {
     const live = ctx.get('sessions')?.get(sessionId)
     if (live !== undefined) {
       skipped += 1
+      skippedIds.push(sessionId)
       continue
     }
     try {
@@ -388,6 +399,7 @@ async function handleDeleteAll(ctx: any, sessionIds: readonly string[], res: Ser
     total: sessionIds.length,
     deleted,
     skipped,
+    skippedIds,
     failed,
     failures,
   })

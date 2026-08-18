@@ -24,7 +24,7 @@ function readJsonBody(req) {
       if (settled) return;
       size += chunk.length;
       if (size > 1e6) {
-        fail(new HttpError(413, "request body too large"));
+        fail(new HttpError(413, "\u8BF7\u6C42\u4F53\u8FC7\u5927\uFF08\u4E0A\u9650 1MB\uFF09"));
         return;
       }
       chunks.push(chunk);
@@ -36,10 +36,10 @@ function readJsonBody(req) {
         const text = Buffer.concat(chunks).toString("utf8");
         resolve(text === "" ? {} : JSON.parse(text));
       } catch {
-        reject(new HttpError(400, "request body is not valid JSON"));
+        reject(new HttpError(400, "\u8BF7\u6C42\u4F53\u4E0D\u662F\u5408\u6CD5\u7684 JSON"));
       }
     });
-    req.on("error", () => fail(new HttpError(400, "request stream failed")));
+    req.on("error", () => fail(new HttpError(400, "\u8BF7\u6C42\u6D41\u8BFB\u53D6\u5931\u8D25")));
   });
 }
 function sendJson(res, status, value) {
@@ -53,23 +53,23 @@ function sendJson(res, status, value) {
 function requireSessionId(body) {
   const sessionId = body.sessionId;
   if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 512) {
-    throw new HttpError(400, "sessionId must be a non-empty string");
+    throw new HttpError(400, "sessionId \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32");
   }
   return sessionId;
 }
 function requireSessionIds(body) {
   const raw = body.sessionIds;
   if (!Array.isArray(raw) || raw.length === 0) {
-    throw new HttpError(400, "sessionIds must be a non-empty array");
+    throw new HttpError(400, "sessionIds \u5FC5\u987B\u662F\u975E\u7A7A\u6570\u7EC4");
   }
   if (raw.length > 500) {
-    throw new HttpError(400, "sessionIds must not exceed 500 entries");
+    throw new HttpError(400, "sessionIds \u6700\u591A 500 \u9879");
   }
   const seen = /* @__PURE__ */ new Set();
   const ids = [];
   for (const value of raw) {
     if (typeof value !== "string" || value.length === 0 || value.length > 512) {
-      throw new HttpError(400, "sessionIds must contain only non-empty strings");
+      throw new HttpError(400, "sessionIds \u53EA\u80FD\u5305\u542B\u975E\u7A7A\u5B57\u7B26\u4E32");
     }
     if (seen.has(value)) continue;
     seen.add(value);
@@ -83,7 +83,7 @@ async function unarchiveSession(registry, sessionId) {
   if (typeof internals.enqueueOperation !== "function" || typeof internals.requireState !== "function" || typeof internals.setState !== "function") {
     throw new HttpError(
       503,
-      "workspace registry write chain is unavailable (harness API drift); restore is disabled until this plugin is updated"
+      "workspace registry \u5199\u94FE\u4E0D\u53EF\u7528\uFF08harness API \u6F02\u79FB\uFF09\uFF1B\u6062\u590D/\u5220\u9664\u5DF2\u505C\u7528\uFF0C\u8BF7\u66F4\u65B0\u672C\u63D2\u4EF6"
     );
   }
   let changed = false;
@@ -103,10 +103,10 @@ function apply(ctx) {
     const pathname = new URL(req.url ?? "/", "http://x").pathname;
     const route = pathname === "/dsh-archive/restore" ? "restore" : pathname === "/dsh-archive/delete" ? "delete" : pathname === "/dsh-archive/delete-all" ? "delete-all" : void 0;
     try {
-      if (route === void 0) throw new HttpError(404, `unknown route ${JSON.stringify(pathname)}`);
-      if (req.method !== "POST") throw new HttpError(405, "method not allowed; use POST");
+      if (route === void 0) throw new HttpError(404, `\u672A\u77E5\u8DEF\u7531 ${JSON.stringify(pathname)}`);
+      if (req.method !== "POST") throw new HttpError(405, "\u4EC5\u652F\u6301 POST \u65B9\u6CD5");
       const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-      if (mediaType !== "application/json") throw new HttpError(415, "content type must be application/json");
+      if (mediaType !== "application/json") throw new HttpError(415, "content-type \u5FC5\u987B\u662F application/json");
       const body = await readJsonBody(req);
       if (route === "restore") {
         await handleRestore(ctx, requireSessionId(body), res);
@@ -121,7 +121,7 @@ function apply(ctx) {
         return;
       }
       ctx.logger.warn(error instanceof Error ? error : new Error(String(error)));
-      sendJson(res, 500, { ok: false, error: "internal error" });
+      sendJson(res, 500, { ok: false, error: "\u5185\u90E8\u9519\u8BEF" });
     }
   };
   ctx.effect(
@@ -150,7 +150,7 @@ async function deleteSessionCore(ctx, sessionId) {
       const dir = dirname(location.path);
       const dirName = basename(dir);
       if (dirName !== sessionId && dirName !== encodeURIComponent(sessionId)) {
-        throw new HttpError(500, `refusing to remove unexpected session directory ${JSON.stringify(dir)}`);
+        throw new HttpError(500, `\u62D2\u7EDD\u5220\u9664\u610F\u5916\u7684\u4F1A\u8BDD\u76EE\u5F55 ${JSON.stringify(dir)}`);
       }
       targetDir = dir;
     }
@@ -172,7 +172,7 @@ async function deleteSessionCore(ctx, sessionId) {
   if (targetDir !== null) {
     const dirName = basename(targetDir);
     if (dirName !== sessionId && dirName !== encodeURIComponent(sessionId)) {
-      throw new HttpError(500, `refusing to remove unexpected session directory ${JSON.stringify(targetDir)}`);
+      throw new HttpError(500, `\u62D2\u7EDD\u5220\u9664\u610F\u5916\u7684\u4F1A\u8BDD\u76EE\u5F55 ${JSON.stringify(targetDir)}`);
     }
     await rm(targetDir, { recursive: true, force: true });
     removedFiles = true;
@@ -199,7 +199,10 @@ async function deleteSessionCore(ctx, sessionId) {
 async function handleDelete(ctx, sessionId, res) {
   const live = ctx.get("sessions")?.get(sessionId);
   if (live !== void 0) {
-    throw new HttpError(409, "session is live in this process; close it before deleting");
+    throw new HttpError(
+      409,
+      "\u8BE5\u4F1A\u8BDD\u4ECD\u5728\u8FDB\u7A0B\u4E2D\u8FD0\u884C\uFF0C\u65E0\u6CD5\u5220\u9664\u3002\u5F52\u6863\u4E0D\u4F1A\u7ED3\u675F\u4F1A\u8BDD\u2014\u2014\u4F1A\u8BDD\u4F1A\u4E00\u76F4\u5B58\u6D3B\u5230 dsh web \u91CD\u542F\u4E3A\u6B62\uFF1B\u8BF7\u91CD\u542F dsh web \u540E\u518D\u5220\u9664"
+    );
   }
   const result = await deleteSessionCore(ctx, sessionId);
   sendJson(res, 200, {
@@ -212,11 +215,13 @@ async function handleDeleteAll(ctx, sessionIds, res) {
   let deleted = 0;
   let skipped = 0;
   let failed = 0;
+  const skippedIds = [];
   const failures = [];
   for (const sessionId of sessionIds) {
     const live = ctx.get("sessions")?.get(sessionId);
     if (live !== void 0) {
       skipped += 1;
+      skippedIds.push(sessionId);
       continue;
     }
     try {
@@ -234,6 +239,7 @@ async function handleDeleteAll(ctx, sessionIds, res) {
     total: sessionIds.length,
     deleted,
     skipped,
+    skippedIds,
     failed,
     failures
   });

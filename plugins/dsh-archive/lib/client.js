@@ -54,6 +54,11 @@ function formatTime(value) {
     return "";
   }
 }
+function formatSkippedIds(ids, skipped) {
+  const shown = ids.slice(0, 10);
+  const suffix = shown.length < skipped ? `\u2026\u7B49 ${skipped} \u4E2A` : "";
+  return shown.map((id) => `\u300C${id}\u300D`).join("\u3001") + suffix;
+}
 function ArchiveIcon({ size }) {
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
     "svg",
@@ -78,6 +83,26 @@ function ArchiveIcon({ size }) {
 var downloadStates = {};
 var downloadListeners = /* @__PURE__ */ new Set();
 var downloadInflight = /* @__PURE__ */ new Set();
+var panelNoticeText = null;
+var noticeListeners = /* @__PURE__ */ new Set();
+var noticeSnapshot = { text: null };
+function subscribeNotice(listener) {
+  noticeListeners.add(listener);
+  return () => {
+    noticeListeners.delete(listener);
+  };
+}
+function emitNotice() {
+  noticeSnapshot = { text: panelNoticeText };
+  for (const listener of noticeListeners) listener();
+}
+function getNoticeSnapshot() {
+  return noticeSnapshot;
+}
+function setNotice(text) {
+  panelNoticeText = text;
+  emitNotice();
+}
 var downloadsSnapshot = { bySession: {} };
 function subscribeDownloads(listener) {
   downloadListeners.add(listener);
@@ -308,14 +333,37 @@ function apply(ctx) {
       padding: "8px 12px 12px"
     },
     error: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
       padding: "8px 12px",
       marginBottom: "8px",
       borderRadius: "8px",
       border: "1px solid var(--dsw-alias-state-error-primary)",
       color: "var(--dsw-alias-state-error-primary)",
-      fontSize: "12px",
+      fontSize: "12px"
+    },
+    errorText: {
+      flex: 1,
+      minWidth: 0,
       whiteSpace: "pre-wrap",
       wordBreak: "break-all"
+    },
+    errorDismiss: {
+      flex: "none",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "18px",
+      height: "18px",
+      marginTop: "1px",
+      padding: 0,
+      border: "none",
+      borderRadius: "4px",
+      background: "transparent",
+      color: "var(--dsw-alias-label-tertiary)",
+      fontSize: "12px",
+      cursor: "pointer"
     },
     row: {
       display: "flex",
@@ -372,13 +420,15 @@ function apply(ctx) {
     const [open, setOpen] = (0, import_react.useState)(false);
     const [busy, setBusy] = (0, import_react.useState)(null);
     const [batchBusy, setBatchBusy] = (0, import_react.useState)(false);
-    const [error, setError] = (0, import_react.useState)(null);
     const panelRef = (0, import_react.useRef)(null);
     const triggerRef = (0, import_react.useRef)(null);
     const busyRef = (0, import_react.useRef)(false);
     const batchBusyRef = (0, import_react.useRef)(false);
+    const notice = (0, import_react.useSyncExternalStore)(
+      (listener) => subscribeNotice(listener),
+      () => getNoticeSnapshot()
+    );
     const closePanel = () => {
-      setError(null);
       setOpen(false);
     };
     const workspace = (0, import_react.useMemo)(() => {
@@ -426,7 +476,6 @@ function apply(ctx) {
       if (!open) return;
       const onKey = (event) => {
         if (event.key === "Escape") {
-          setError(null);
           setOpen(false);
         }
       };
@@ -435,7 +484,6 @@ function apply(ctx) {
         if (target === null) return;
         if (panelRef.current?.contains(target) === true) return;
         if (triggerRef.current?.contains(target) === true) return;
-        setError(null);
         setOpen(false);
       };
       document.addEventListener("keydown", onKey);
@@ -452,7 +500,7 @@ function apply(ctx) {
     const run = async (action, id) => {
       if (busyRef.current) return;
       busyRef.current = true;
-      setError(null);
+      setNotice(null);
       setBusy({ id, action });
       try {
         await callHost(action, { sessionId: id });
@@ -461,7 +509,7 @@ function apply(ctx) {
         ctx.workspaces.refresh?.().catch?.(() => {
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setNotice(err instanceof Error ? err.message : String(err));
       } finally {
         busyRef.current = false;
         setBusy(null);
@@ -489,7 +537,7 @@ function apply(ctx) {
       if (!confirmed) return;
       if (batchBusyRef.current) return;
       batchBusyRef.current = true;
-      setError(null);
+      setNotice(null);
       setBatchBusy(true);
       void (async () => {
         try {
@@ -498,30 +546,43 @@ function apply(ctx) {
           let deleted = 0;
           let skipped = 0;
           let failed = 0;
+          const skippedIds = [];
           const failures = [];
           for (let offset = 0; offset < ids.length; offset += DELETE_BATCH_SIZE) {
             const payload = await callHost("delete-all", { sessionIds: ids.slice(offset, offset + DELETE_BATCH_SIZE) });
             deleted += payload.deleted ?? 0;
             skipped += payload.skipped ?? 0;
             failed += payload.failed ?? 0;
+            const chunkSkipped = payload.skippedIds;
+            if (chunkSkipped !== void 0 && chunkSkipped.length > 0) skippedIds.push(...chunkSkipped);
             const chunkFailures = payload.failures;
             if (chunkFailures !== void 0 && chunkFailures.length > 0) failures.push(...chunkFailures);
           }
-          if (failed > 0) {
-            const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`, `\u5931\u8D25 ${failed} \u4E2A`];
-            if (skipped > 0) parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A`);
-            let message = parts.join("\uFF0C");
-            if (failures.length > 0) {
-              message += `\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
+          let message;
+          if (deleted === total) {
+            message = `\u5DF2\u5220\u9664\u5168\u90E8 ${total} \u4E2A\u4F1A\u8BDD`;
+          } else {
+            const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`];
+            if (skipped > 0) {
+              const skippedText = skippedIds.length > 0 ? `\uFF1A${formatSkippedIds(skippedIds, skipped)}` : "";
+              parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A${skippedText}`);
             }
-            setError(message);
+            if (failed > 0) parts.push(`\u5931\u8D25 ${failed} \u4E2A`);
+            message = parts.join("\uFF0C");
+            if (skipped > 0) {
+              message += "\u3002\u5F52\u6863\u4E0D\u4F1A\u7ED3\u675F\u4F1A\u8BDD\u2014\u2014\u4F1A\u8BDD\u4F1A\u4E00\u76F4\u5B58\u6D3B\u5230 dsh web \u91CD\u542F\u4E3A\u6B62\uFF1B\u91CD\u542F\u540E\u8FD9\u4E9B\u4F1A\u8BDD\u5373\u53EF\u5220\u9664";
+            }
+            if (failures.length > 0) {
+              message += `\u3002\u5931\u8D25\u660E\u7EC6\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
+            }
           }
+          setNotice(message);
           ctx.sessions.refresh?.().catch?.(() => {
           });
           ctx.workspaces.refresh?.().catch?.(() => {
           });
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
+          setNotice(err instanceof Error ? err.message : String(err));
         } finally {
           batchBusyRef.current = false;
           setBatchBusy(false);
@@ -564,7 +625,23 @@ function apply(ctx) {
               )
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.panelBody, children: [
-              error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.error, children: error }) : null,
+              notice.text !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.error, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.errorText, children: notice.text }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-archive-close",
+                    style: styles.errorDismiss,
+                    "aria-label": "\u6E05\u9664\u63D0\u793A",
+                    title: "\u6E05\u9664\u63D0\u793A",
+                    onClick: () => {
+                      setNotice(null);
+                    },
+                    children: "\u2715"
+                  }
+                )
+              ] }) : null,
               rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.empty, children: "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" }) : null,
               rows.map((row) => {
                 const rowBusy = busy !== null && busy.id === row.id;
