@@ -261,8 +261,16 @@ async function handleRestore(ctx: any, sessionId: string, res: ServerResponse): 
  * 步骤顺序见文件头注释：先只读校验，再写 registry（unarchive → detach），
  * 最后才删文件，以保证任何失败都停在可恢复状态。返回结果字段，硬错误
  * （目录名守卫等）抛 HttpError，由调用方决定是 500 还是整批继续。
+ *
+ * `headers` 可选：批量删除时由调用方预先 list() 一次传入，避免每个会话
+ * 重复全量读取持久化列表（N 个会话 O(N) 次 list 的 O(N²) 退化）；缺省时
+ * 自己读取（单删路径）。
  */
-async function deleteSessionCore(ctx: any, sessionId: string): Promise<{
+async function deleteSessionCore(
+  ctx: any,
+  sessionId: string,
+  headers?: SessionHeaderLike[],
+): Promise<{
   removedFiles: boolean
   detachedWorkspaces: number
   unarchived: boolean
@@ -271,8 +279,8 @@ async function deleteSessionCore(ctx: any, sessionId: string): Promise<{
   detachErrors: string[]
 }> {
   const registry = ctx.workspaceRegistry as RegistryLike
-  const headers = (await ctx.sessionPersistence.list()) as SessionHeaderLike[]
-  const header = headers.find(candidate => candidate.id === sessionId)
+  const allHeaders = headers ?? (await ctx.sessionPersistence.list()) as SessionHeaderLike[]
+  const header = allHeaders.find(candidate => candidate.id === sessionId)
 
   // 1. 只读定位：算出日志所在目录并先行做目录名守卫（不在此处删任何东西）。
   //    目录名必须是会话 id 本身（harness 的 encodeSegment 对真实 id
@@ -367,25 +375,43 @@ async function handleDelete(ctx: any, sessionId: string, res: ServerResponse): P
 /**
  * 一键批量硬删除：对每个 id 复用 deleteSessionCore。live 会话跳过并计入
  * skipped（批量语义：能删多少删多少，不让一个运行中的会话卡死整批）；
- * 硬错误计入 failed 且不中断整批。响应携带汇总计数、被跳过（live）会话的
- * id 列表与逐会话失败明细，让客户端能给出完整提示。
+ * 硬错误计入 failed 且不中断整批；detach 失败（文件已删但账目未解除）同样
+ * 计入 failed 并给出明细，绝不静默记为成功。响应携带汇总计数、被跳过
+ * （live）会话的 id 列表与逐会话失败明细，让客户端能给出完整提示。
+ *
+ * 持久化列表只读一次传给 deleteSessionCore 复用（见其注释）；list 失败属于
+ * 服务级故障，直接整批 500 由 handler 兜底，而不是逐个记 failed。
  */
 async function handleDeleteAll(ctx: any, sessionIds: readonly string[], res: ServerResponse): Promise<void> {
+  const sessions = ctx.get('sessions')
+  const headers = await ctx.sessionPersistence.list() as SessionHeaderLike[]
   let deleted = 0
   let skipped = 0
   let failed = 0
   const skippedIds: string[] = []
   const failures: Array<{ sessionId: string; error: string }> = []
   for (const sessionId of sessionIds) {
-    const live = ctx.get('sessions')?.get(sessionId)
+    const live = sessions?.get(sessionId)
     if (live !== undefined) {
       skipped += 1
       skippedIds.push(sessionId)
       continue
     }
     try {
-      await deleteSessionCore(ctx, sessionId)
-      deleted += 1
+      const result = await deleteSessionCore(ctx, sessionId, headers)
+      if (result.detachErrors.length > 0) {
+        // detach 失败意味着文件与归档都已处理但 workspace 账目未解除——
+        // 属于「删除不完整」，不能静默记为成功。计入 failed 并给出明细，
+        // 让用户能排查残留账目。
+        failed += 1
+        failures.push({
+          sessionId,
+          error: `文件已删除，但 workspace 账目解除失败：${result.detachErrors.join('；')}`,
+        })
+        ctx.logger.warn(new Error(`archive-tab: batch delete incomplete for '${sessionId}': ${result.detachErrors.join('; ')}`))
+      } else {
+        deleted += 1
+      }
     } catch (error) {
       failed += 1
       const message = error instanceof HttpError ? error.message : String(error)

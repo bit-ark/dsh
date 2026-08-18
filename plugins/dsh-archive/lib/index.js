@@ -139,10 +139,10 @@ async function handleRestore(ctx, sessionId, res) {
     archivedSessionIds: [...registry.archivedSessionIds]
   });
 }
-async function deleteSessionCore(ctx, sessionId) {
+async function deleteSessionCore(ctx, sessionId, headers) {
   const registry = ctx.workspaceRegistry;
-  const headers = await ctx.sessionPersistence.list();
-  const header = headers.find((candidate) => candidate.id === sessionId);
+  const allHeaders = headers ?? await ctx.sessionPersistence.list();
+  const header = allHeaders.find((candidate) => candidate.id === sessionId);
   let targetDir = null;
   if (header !== void 0) {
     const location = ctx.sessionPersistence.locate(header);
@@ -212,21 +212,32 @@ async function handleDelete(ctx, sessionId, res) {
   });
 }
 async function handleDeleteAll(ctx, sessionIds, res) {
+  const sessions = ctx.get("sessions");
+  const headers = await ctx.sessionPersistence.list();
   let deleted = 0;
   let skipped = 0;
   let failed = 0;
   const skippedIds = [];
   const failures = [];
   for (const sessionId of sessionIds) {
-    const live = ctx.get("sessions")?.get(sessionId);
+    const live = sessions?.get(sessionId);
     if (live !== void 0) {
       skipped += 1;
       skippedIds.push(sessionId);
       continue;
     }
     try {
-      await deleteSessionCore(ctx, sessionId);
-      deleted += 1;
+      const result = await deleteSessionCore(ctx, sessionId, headers);
+      if (result.detachErrors.length > 0) {
+        failed += 1;
+        failures.push({
+          sessionId,
+          error: `\u6587\u4EF6\u5DF2\u5220\u9664\uFF0C\u4F46 workspace \u8D26\u76EE\u89E3\u9664\u5931\u8D25\uFF1A${result.detachErrors.join("\uFF1B")}`
+        });
+        ctx.logger.warn(new Error(`archive-tab: batch delete incomplete for '${sessionId}': ${result.detachErrors.join("; ")}`));
+      } else {
+        deleted += 1;
+      }
     } catch (error) {
       failed += 1;
       const message = error instanceof HttpError ? error.message : String(error);
