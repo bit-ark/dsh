@@ -3,7 +3,7 @@
  */
 import React from 'react'
 import { TipButton } from './tip.js'
-import { AUTO_WIDEN, CONTENT_MIN, PANEL_DEFAULT, PANEL_MIN, SPLIT_KEY, TREE_DEFAULT, TREE_MIN, WIDTH_KEY, clampPanelWidth, clampTreeWidth, findNode, messageOf, patchNode, readStored, toNode, writeStored } from './helpers.js'
+import { AUTO_WIDEN, CONTENT_MIN, PANEL_DEFAULT, PANEL_MIN, SPLIT_KEY, TREE_DEFAULT, TREE_MIN, WIDTH_KEY, clampPanelWidth, clampTreeWidth, cubicBezierEase, findNode, messageOf, panelActionFor, patchNode, readStored, toNode, writeStored } from './helpers.js'
 import { chevronIcon, closeIcon, IconFrame, refreshIcon } from './icons.js'
 import { FilesView } from './files-view.js'
 import { FilePreview } from './preview.js'
@@ -34,7 +34,7 @@ const { useState, useEffect, useCallback, useRef } = React
 			const [showIgnored, setShowIgnored] = useState(false);
 			const [selected, setSelected] = useState(null);
 			// Panel geometry: persisted width + tree pane width + live max bound.
-			const [width, setWidth] = useState(() => readStored(WIDTH_KEY, PANEL_DEFAULT));
+			const [width, setWidth] = useState(() => Math.max(PANEL_MIN, readStored(WIDTH_KEY, PANEL_DEFAULT)));
 			const [treeWidth, setTreeWidth] = useState(() => readStored(SPLIT_KEY, TREE_DEFAULT));
 			const [maxWidth, setMaxWidth] = useState(() => window.innerWidth - PANEL_MIN);
 			const [resizing, setResizing] = useState(false);
@@ -68,7 +68,93 @@ const { useState, useEffect, useCallback, useRef } = React
 			const treeWidthRef = useRef(treeWidth);
 			widthRef.current = width;
 			treeWidthRef.current = treeWidth;
-			useEffect(() => { debouncedWrite(WIDTH_KEY, width); }, [width]);
+
+			// ── 宽度动画（JS 逐帧 tween，与主框架左侧栏同一曲线/时长）─────────
+			// 用逐帧 setWidth 而不是 CSS transition：树分栏钳制与三列联动都
+			// 跟随 width 状态，逐帧驱动才能让树栏、对话列与面板边缘同步滑动
+			// （CSS 过渡只有最终状态，树栏会瞬跳）。动画期间抑制 localStorage
+			// 写入（中间帧不入盘），结束时按 persist 落最终值。
+			const tweenRef = useRef(null);
+			const tweeningRef = useRef(false);
+			const stopTween = () => {
+				if (tweenRef.current !== null) {
+					cancelAnimationFrame(tweenRef.current);
+					tweenRef.current = null;
+				}
+			};
+			const animateWidthTo = (target, options = {}) => {
+				const { floor = PANEL_MIN, duration = 300, persist = false, onEnd } = options;
+				stopTween();
+				tweeningRef.current = true;
+				// reduced-motion：瞬时到位，不跑动画。
+				if (window.matchMedia !== undefined && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+					setWidth(clampPanelWidth(target, maxWidthRef.current, floor));
+					tweeningRef.current = false;
+					if (persist) writeStored(WIDTH_KEY, target);
+					if (onEnd !== undefined) onEnd();
+					return;
+				}
+				const from = widthRef.current;
+				const start = performance.now();
+				const step = (now) => {
+					const t = Math.min(1, (now - start) / duration);
+					const eased = cubicBezierEase(t);
+					setWidth(clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor));
+					if (t < 1) {
+						tweenRef.current = requestAnimationFrame(step);
+					} else {
+						tweenRef.current = null;
+						tweeningRef.current = false;
+						if (persist) writeStored(WIDTH_KEY, target);
+						if (onEnd !== undefined) onEnd();
+					}
+				};
+				tweenRef.current = requestAnimationFrame(step);
+			};
+
+			// ── 两段式收起：宽于最窄 → 先收窄到最窄；已最窄 → 滑出并隐藏 ────
+			const hidePanel = () => {
+				const savedTree = treeWidthRef.current;
+				animateWidthTo(0, {
+					floor: 0,
+					persist: false,
+					onEnd: () => {
+						// 滑出经过 < PANEL_MIN 的宽度：树栏被钳到 0、width 状态为 0，
+						// 结束时一并还原——重开回到"最窄面板"而非残留 0 宽度。
+						setWidth(PANEL_MIN);
+						setTreeWidth(clampTreeWidth(savedTree, PANEL_MIN));
+						writeStored(WIDTH_KEY, PANEL_MIN);
+						setOpen(false);
+					},
+				});
+			};
+			const collapseOrHide = () => {
+				if (panelActionFor(widthRef.current) === "shrink") {
+					animateWidthTo(PANEL_MIN, { floor: PANEL_MIN, persist: true });
+				} else {
+					hidePanel();
+				}
+			};
+			const openPanel = () => {
+				// setWidth(0) 与 setOpen(true) 同一批次：首帧即 0 宽（无闪屏），
+				// 再 rAF 滑入到持久化宽度。动画中的 0 宽帧不落盘。
+				tweeningRef.current = true;
+				const target = clampPanelWidth(readStored(WIDTH_KEY, PANEL_DEFAULT), maxWidthRef.current);
+				const savedTree = treeWidthRef.current;
+				setOpen(true);
+				setWidth(0);
+				requestAnimationFrame(() => {
+					animateWidthTo(target, {
+						floor: 0,
+						persist: false,
+						onEnd: () => {
+							// 滑入经过 < PANEL_MIN 的宽度时树栏被钳到 0，结束后复原。
+							setTreeWidth(clampTreeWidth(savedTree, target));
+						},
+					});
+				});
+			};
+			useEffect(() => { if (!tweeningRef.current) debouncedWrite(WIDTH_KEY, width); }, [width]);
 			useEffect(() => { debouncedWrite(SPLIT_KEY, treeWidth); }, [treeWidth]);
 			// 两栏常驻下，面板变窄（拖窄/双击重置/窗口缩放）时树宽必须同步
 			// 钳回 [TREE_MIN, 面板宽−CONTENT_MIN]，否则树会把内容区挤没。
@@ -85,7 +171,7 @@ const { useState, useEffect, useCallback, useRef } = React
 			}, [width]);
 			useEffect(() => () => {
 				if (writeTimerRef.current !== null) clearTimeout(writeTimerRef.current);
-				if (resizeClickTimer.current !== null) clearTimeout(resizeClickTimer.current);
+				stopTween();
 				writeStored(WIDTH_KEY, widthRef.current);
 				writeStored(SPLIT_KEY, treeWidthRef.current);
 			}, []);
@@ -130,11 +216,14 @@ const { useState, useEffect, useCallback, useRef } = React
 			// Keep the panel within the live bound, and FOLLOW the bound when the
 			// panel was already pinned to it (sidebar collapse/expand or window
 			// resize widens the right content area → a pinned panel expands too).
+			// 动画（滑入/滑出会经过 < PANEL_MIN 的宽度）期间跳过跟随：边界由
+			// tween 每帧按 maxWidthRef 钳制，避免把 0 宽中帧弹回 PANEL_MIN。
 			const maxWidthRef = useRef(maxWidth);
 			useEffect(() => {
 				const previous = maxWidthRef.current;
 				maxWidthRef.current = maxWidth;
 				if (maxWidth === previous) return;
+				if (tweeningRef.current) return;
 				setWidth((current) => {
 					if (current >= previous - 2) return clampPanelWidth(maxWidth, maxWidth);
 					return clampPanelWidth(current, maxWidth);
@@ -152,16 +241,22 @@ const { useState, useEffect, useCallback, useRef } = React
 			};
 
 			// ── panel resize drag (left edge) ────────────────────────────────
-			// 单击手柄直接收起面板；拖拽调宽与双击重置宽度不受影响。
-			// 手势区分：pointermove 位移 >4px 视为拖拽（click 被忽略）；
-			// 单击延迟 300ms 执行收起，双击的第二击会取消它（交由
-			// onDoubleClick 重置宽度）。
+			// 单击手柄执行两段式收起（宽于最窄→收窄，已最窄→收起），立即响应、
+			// 零延迟；双击取消当前动作并重置宽度。手势区分：pointermove 位移
+			// >4px 视为拖拽（pointerup 不再触发单击动作）；双击通过第二击的
+			// onDoubleClick 取消/反转（重置到默认宽度），所以单击无需等待。
 			const resizeDragMoved = useRef(false);
-			const resizeClickTimer = useRef(null);
 			const onResizePointerDown = (event) => {
 				event.preventDefault();
 				event.currentTarget.setPointerCapture(event.pointerId);
-				resizeOrigin.current = { x: event.clientX, width };
+				// 动画（滑出/滑入）中途抓手柄：停掉动画；宽度若已低于 PANEL_MIN
+				// （滑出途中），先吸附回最窄再以该值为拖拽原点——否则拖拽钳制
+				// 会把面板弹回 280 造成跳变。
+				const tweening = tweenRef.current !== null;
+				stopTween();
+				const base = tweening ? clampPanelWidth(widthRef.current, maxWidthRef.current) : width;
+				if (tweening && base !== widthRef.current) setWidth(base);
+				resizeOrigin.current = { x: event.clientX, width: base };
 				resizeDragMoved.current = false;
 				setResizing(true);
 			};
@@ -176,23 +271,15 @@ const { useState, useEffect, useCallback, useRef } = React
 				if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
 				event.currentTarget.releasePointerCapture(event.pointerId);
 				setResizing(false);
-				// 单击手柄收起：pointer capture 会把后续 click 重定向到轨道
-				// 元素（子手柄收不到），所以在 pointerup 直接判定——
-				// 无位移视为单击，延迟 300ms 执行收起，双击第二击取消
-				// （交由 onDoubleClick 重置宽度）。
+				// 无位移视为单击：立即两段式收起（不延迟）。pointer capture 会把
+				// 后续 click 重定向到轨道元素（子手柄收不到），故在 pointerup 判定。
 				if (resizeDragMoved.current) { resizeDragMoved.current = false; return; }
-				if (resizeClickTimer.current !== null) {
-					clearTimeout(resizeClickTimer.current);
-					resizeClickTimer.current = null;
-					return;
-				}
-				resizeClickTimer.current = window.setTimeout(() => {
-					resizeClickTimer.current = null;
-					setOpen(false);
-				}, 300);
+				collapseOrHide();
 			};
 			const onResizeDoubleClick = () => {
-				setWidth(clampPanelWidth(PANEL_DEFAULT, maxWidth));
+				// 双击重置：取消进行中的收窄/滑出，动画回默认宽度。
+				stopTween();
+				animateWidthTo(clampPanelWidth(PANEL_DEFAULT, maxWidthRef.current), { floor: PANEL_MIN, persist: true });
 			};
 
 			// ── split divider drag (tree pane width) ─────────────────────────
@@ -216,7 +303,9 @@ const { useState, useEffect, useCallback, useRef } = React
 			// Opening a file from a narrow panel widens it enough to fit both
 			// panes (tree + content). 两栏常驻：选中文件即分栏。
 			const onSelect = (node) => {
-				if (width < TREE_MIN + CONTENT_MIN) setWidth(clampPanelWidth(AUTO_WIDEN, maxWidth));
+				if (width < TREE_MIN + CONTENT_MIN) {
+					animateWidthTo(clampPanelWidth(AUTO_WIDEN, maxWidthRef.current), { floor: PANEL_MIN, persist: true });
+				}
 				setSelected(node);
 			};
 			const onClosePreview = () => { setSelected(null); };
@@ -422,7 +511,7 @@ const { useState, useEffect, useCallback, useRef } = React
 			};
 
 			if (!open) {
-				return h(TipButton, { tip: "展开工作面板", className: "dwb-openbtn", onClick: () => setOpen(true) }, "工作面板");
+				return h(TipButton, { tip: "展开工作面板", className: "dwb-openbtn", onClick: openPanel }, "工作面板");
 			}
 
 			// 两栏常驻：只要选中了文件就分栏（目录树 | 内容预览），
@@ -442,7 +531,7 @@ const { useState, useEffect, useCallback, useRef } = React
 				},
 					h("div", {
 						className: "dwb-resize-grip",
-						title: "单击收起面板",
+						title: width > PANEL_MIN ? "单击缩至最窄（双击重置）" : "单击收起面板（双击重置）",
 					},
 						h("span", { className: "dwb-resize-arrow" }, h(IconFrame, { size: 13 }, h("path", { d: "M9 6l6 6-6 6" }))),
 					),
@@ -468,7 +557,7 @@ const { useState, useEffect, useCallback, useRef } = React
 					}),
 					h(TipButton, { tip: "刷新", className: "dwb-iconbtn", onClick: refresh, disabled: refreshing },
 						h("span", { className: refreshing ? "dwb-spin" : undefined }, refreshIcon())),
-					h(TipButton, { tip: "收起", className: "dwb-iconbtn", onClick: () => setOpen(false) }, closeIcon()),
+					h(TipButton, { tip: "收起（再次点击关闭）", className: "dwb-iconbtn", onClick: collapseOrHide }, closeIcon()),
 				),
 				h("div", { className: "dwb-tabs" },
 					h("button", {

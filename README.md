@@ -12,7 +12,7 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 | `@bit-ark/dsh-notify` | 0.1.1 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
 | `@bit-ark/dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
 | `@bit-ark/dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
-| `@bit-ark/dsh-work` | 1.1.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ 源码编辑与保存 + Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/write \| /open \| /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
+| `@bit-ark/dsh-work` | 1.2.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ 源码编辑与保存 + Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/write \| /open \| /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
 
 ## 目录结构
 

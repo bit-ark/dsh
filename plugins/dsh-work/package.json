@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-work",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Right-docked workbench panel: file/dir tree with icons and click-to-preview (text/image/audio/video), plus git commit graph and basic git operations (stage/commit/ignore/init)",
   "type": "module",
   "main": "lib/index.js",
@@ -16,7 +16,7 @@
   "scripts": {
     "build": "node build.mjs",
     "prepublishOnly": "node build.mjs",
-    "test": "node build.mjs && node test/classify.test.mjs && node test/preview.test.mjs"
+    "test": "node build.mjs && node test/classify.test.mjs && node test/preview.test.mjs && node test/panel.test.mjs"
   },
   "dsh": {
     "bundle": {

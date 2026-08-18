@@ -35,8 +35,48 @@
 		export function writeStored(key, value) {
 			try { window.localStorage.setItem(key, String(Math.round(value))); } catch { /* private mode: session-only */ }
 		}
-		export function clampPanelWidth(width, maxWidth) {
-			return Math.min(maxWidth, Math.max(PANEL_MIN, Math.round(width)));
+		export function clampPanelWidth(width, maxWidth, min = PANEL_MIN) {
+			return Math.min(maxWidth, Math.max(min, Math.round(width)));
+		}
+		// ── 宽度动画：与主框架左侧栏同一曲线/时长的 JS 逐帧 tween ─────────────
+		// cubic-bezier(0.4, 0, 0.2, 1) = ui-theme 的 --ds-ease-in-out（AppFrame
+		// 网格轨道过渡用它）。面板宽度用逐帧 setWidth 驱动（而非 CSS transition）：
+		// 树分栏钳制与三列联动都跟随 width 状态，逐帧驱动才能同步滑动。
+		export function cubicBezierEase(t, x1 = 0.4, y1 = 0, x2 = 0.2, y2 = 1) {
+			// 解 cubic-bezier x(t)=u 得参数 t，再求 y(t)。牛顿迭代 + 二分兜底。
+			const cx = 3 * x1;
+			const bx = 3 * (x2 - x1) - cx;
+			const ax = 1 - cx - bx;
+			const cy = 3 * y1;
+			const by = 3 * (y2 - y1) - cy;
+			const ay = 1 - cy - by;
+			const sampleX = (tt) => ((ax * tt + bx) * tt + cx) * tt;
+			const sampleY = (tt) => ((ay * tt + by) * tt + cy) * tt;
+			const sampleDX = (tt) => (3 * ax * tt + 2 * bx) * tt + cx;
+			const u = Math.max(0, Math.min(1, t));
+			if (u === 0 || u === 1) return u;
+			let tt = u;
+			for (let i = 0; i < 8; i++) {
+				const err = sampleX(tt) - u;
+				if (Math.abs(err) < 1e-6) break;
+				const d = sampleDX(tt);
+				if (Math.abs(d) < 1e-6) break;
+				tt -= err / d;
+			}
+			let lo = 0;
+			let hi = 1;
+			tt = Math.max(0, Math.min(1, tt));
+			for (let i = 0; i < 12; i++) {
+				const x = sampleX(tt);
+				if (Math.abs(x - u) < 1e-6) break;
+				if (x < u) lo = tt; else hi = tt;
+				tt = (lo + hi) / 2;
+			}
+			return sampleY(tt);
+		}
+		/** 两段式收起的动作决策：宽于最小显示宽度 → "shrink"（收窄），否则 → "hide"（收起）。 */
+		export function panelActionFor(width, min = PANEL_MIN) {
+			return width > min ? "shrink" : "hide";
 		}
 		export function clampTreeWidth(width, panelWidth) {
 			// 自由拖动：树宽区间 [TREE_MIN, 面板宽 − CONTENT_MIN]，内容区保底；

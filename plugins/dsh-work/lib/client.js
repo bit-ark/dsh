@@ -36,6 +36,7 @@ __export(index_exports, {
   HL_LANG_BY_EXT: () => HL_LANG_BY_EXT,
   PREVIEW_KIND: () => PREVIEW_KIND,
   apply: () => apply,
+  cubicBezierEase: () => cubicBezierEase,
   editorLanguageFor: () => editorLanguageFor,
   escapeHtml: () => escapeHtml,
   fitTipGeometry: () => fitTipGeometry,
@@ -45,6 +46,7 @@ __export(index_exports, {
   mdImageHref: () => mdImageHref,
   mdLinkHref: () => mdLinkHref,
   name: () => name,
+  panelActionFor: () => panelActionFor,
   renderMarkdown: () => renderMarkdown
 });
 module.exports = __toCommonJS(index_exports);
@@ -311,8 +313,43 @@ function writeStored(key, value) {
   } catch {
   }
 }
-function clampPanelWidth(width, maxWidth) {
-  return Math.min(maxWidth, Math.max(PANEL_MIN, Math.round(width)));
+function clampPanelWidth(width, maxWidth, min = PANEL_MIN) {
+  return Math.min(maxWidth, Math.max(min, Math.round(width)));
+}
+function cubicBezierEase(t, x1 = 0.4, y1 = 0, x2 = 0.2, y2 = 1) {
+  const cx = 3 * x1;
+  const bx = 3 * (x2 - x1) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * y1;
+  const by = 3 * (y2 - y1) - cy;
+  const ay = 1 - cy - by;
+  const sampleX = (tt2) => ((ax * tt2 + bx) * tt2 + cx) * tt2;
+  const sampleY = (tt2) => ((ay * tt2 + by) * tt2 + cy) * tt2;
+  const sampleDX = (tt2) => (3 * ax * tt2 + 2 * bx) * tt2 + cx;
+  const u = Math.max(0, Math.min(1, t));
+  if (u === 0 || u === 1) return u;
+  let tt = u;
+  for (let i = 0; i < 8; i++) {
+    const err = sampleX(tt) - u;
+    if (Math.abs(err) < 1e-6) break;
+    const d = sampleDX(tt);
+    if (Math.abs(d) < 1e-6) break;
+    tt -= err / d;
+  }
+  let lo = 0;
+  let hi = 1;
+  tt = Math.max(0, Math.min(1, tt));
+  for (let i = 0; i < 12; i++) {
+    const x = sampleX(tt);
+    if (Math.abs(x - u) < 1e-6) break;
+    if (x < u) lo = tt;
+    else hi = tt;
+    tt = (lo + hi) / 2;
+  }
+  return sampleY(tt);
+}
+function panelActionFor(width, min = PANEL_MIN) {
+  return width > min ? "shrink" : "hide";
 }
 function clampTreeWidth(width, panelWidth) {
   const upper = Math.max(0, Math.round(panelWidth - CONTENT_MIN));
@@ -14227,7 +14264,7 @@ function WorkbenchPanel(props) {
   const [commitMessage, setCommitMessage] = useState3("");
   const [showIgnored, setShowIgnored] = useState3(false);
   const [selected, setSelected] = useState3(null);
-  const [width, setWidth] = useState3(() => readStored(WIDTH_KEY, PANEL_DEFAULT));
+  const [width, setWidth] = useState3(() => Math.max(PANEL_MIN, readStored(WIDTH_KEY, PANEL_DEFAULT)));
   const [treeWidth, setTreeWidth] = useState3(() => readStored(SPLIT_KEY, TREE_DEFAULT));
   const [maxWidth, setMaxWidth] = useState3(() => window.innerWidth - PANEL_MIN);
   const [resizing, setResizing] = useState3(false);
@@ -14257,8 +14294,80 @@ function WorkbenchPanel(props) {
   const treeWidthRef = useRef3(treeWidth);
   widthRef.current = width;
   treeWidthRef.current = treeWidth;
+  const tweenRef = useRef3(null);
+  const tweeningRef = useRef3(false);
+  const stopTween = () => {
+    if (tweenRef.current !== null) {
+      cancelAnimationFrame(tweenRef.current);
+      tweenRef.current = null;
+    }
+  };
+  const animateWidthTo = (target, options = {}) => {
+    const { floor = PANEL_MIN, duration = 300, persist = false, onEnd } = options;
+    stopTween();
+    tweeningRef.current = true;
+    if (window.matchMedia !== void 0 && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setWidth(clampPanelWidth(target, maxWidthRef.current, floor));
+      tweeningRef.current = false;
+      if (persist) writeStored(WIDTH_KEY, target);
+      if (onEnd !== void 0) onEnd();
+      return;
+    }
+    const from = widthRef.current;
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = cubicBezierEase(t);
+      setWidth(clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor));
+      if (t < 1) {
+        tweenRef.current = requestAnimationFrame(step);
+      } else {
+        tweenRef.current = null;
+        tweeningRef.current = false;
+        if (persist) writeStored(WIDTH_KEY, target);
+        if (onEnd !== void 0) onEnd();
+      }
+    };
+    tweenRef.current = requestAnimationFrame(step);
+  };
+  const hidePanel = () => {
+    const savedTree = treeWidthRef.current;
+    animateWidthTo(0, {
+      floor: 0,
+      persist: false,
+      onEnd: () => {
+        setWidth(PANEL_MIN);
+        setTreeWidth(clampTreeWidth(savedTree, PANEL_MIN));
+        writeStored(WIDTH_KEY, PANEL_MIN);
+        setOpen(false);
+      }
+    });
+  };
+  const collapseOrHide = () => {
+    if (panelActionFor(widthRef.current) === "shrink") {
+      animateWidthTo(PANEL_MIN, { floor: PANEL_MIN, persist: true });
+    } else {
+      hidePanel();
+    }
+  };
+  const openPanel = () => {
+    tweeningRef.current = true;
+    const target = clampPanelWidth(readStored(WIDTH_KEY, PANEL_DEFAULT), maxWidthRef.current);
+    const savedTree = treeWidthRef.current;
+    setOpen(true);
+    setWidth(0);
+    requestAnimationFrame(() => {
+      animateWidthTo(target, {
+        floor: 0,
+        persist: false,
+        onEnd: () => {
+          setTreeWidth(clampTreeWidth(savedTree, target));
+        }
+      });
+    });
+  };
   useEffect2(() => {
-    debouncedWrite(WIDTH_KEY, width);
+    if (!tweeningRef.current) debouncedWrite(WIDTH_KEY, width);
   }, [width]);
   useEffect2(() => {
     debouncedWrite(SPLIT_KEY, treeWidth);
@@ -14275,7 +14384,7 @@ function WorkbenchPanel(props) {
   }, [width]);
   useEffect2(() => () => {
     if (writeTimerRef.current !== null) clearTimeout(writeTimerRef.current);
-    if (resizeClickTimer.current !== null) clearTimeout(resizeClickTimer.current);
+    stopTween();
     writeStored(WIDTH_KEY, widthRef.current);
     writeStored(SPLIT_KEY, treeWidthRef.current);
   }, []);
@@ -14311,6 +14420,7 @@ function WorkbenchPanel(props) {
     const previous = maxWidthRef.current;
     maxWidthRef.current = maxWidth;
     if (maxWidth === previous) return;
+    if (tweeningRef.current) return;
     setWidth((current) => {
       if (current >= previous - 2) return clampPanelWidth(maxWidth, maxWidth);
       return clampPanelWidth(current, maxWidth);
@@ -14325,11 +14435,14 @@ function WorkbenchPanel(props) {
     setPathOverride(trimmed.length > 0 && trimmed !== cwd ? trimmed : void 0);
   };
   const resizeDragMoved = useRef3(false);
-  const resizeClickTimer = useRef3(null);
   const onResizePointerDown = (event) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    resizeOrigin.current = { x: event.clientX, width };
+    const tweening = tweenRef.current !== null;
+    stopTween();
+    const base = tweening ? clampPanelWidth(widthRef.current, maxWidthRef.current) : width;
+    if (tweening && base !== widthRef.current) setWidth(base);
+    resizeOrigin.current = { x: event.clientX, width: base };
     resizeDragMoved.current = false;
     setResizing(true);
   };
@@ -14347,18 +14460,11 @@ function WorkbenchPanel(props) {
       resizeDragMoved.current = false;
       return;
     }
-    if (resizeClickTimer.current !== null) {
-      clearTimeout(resizeClickTimer.current);
-      resizeClickTimer.current = null;
-      return;
-    }
-    resizeClickTimer.current = window.setTimeout(() => {
-      resizeClickTimer.current = null;
-      setOpen(false);
-    }, 300);
+    collapseOrHide();
   };
   const onResizeDoubleClick = () => {
-    setWidth(clampPanelWidth(PANEL_DEFAULT, maxWidth));
+    stopTween();
+    animateWidthTo(clampPanelWidth(PANEL_DEFAULT, maxWidthRef.current), { floor: PANEL_MIN, persist: true });
   };
   const onDividerPointerDown = (event) => {
     event.preventDefault();
@@ -14377,7 +14483,9 @@ function WorkbenchPanel(props) {
     setSplitting(false);
   };
   const onSelect = (node) => {
-    if (width < TREE_MIN + CONTENT_MIN) setWidth(clampPanelWidth(AUTO_WIDEN, maxWidth));
+    if (width < TREE_MIN + CONTENT_MIN) {
+      animateWidthTo(clampPanelWidth(AUTO_WIDEN, maxWidthRef.current), { floor: PANEL_MIN, persist: true });
+    }
     setSelected(node);
   };
   const onClosePreview = () => {
@@ -14570,7 +14678,7 @@ function WorkbenchPanel(props) {
     Promise.allSettled(tasks).then(() => setRefreshing(false));
   };
   if (!open) {
-    return h6(TipButton, { tip: "\u5C55\u5F00\u5DE5\u4F5C\u9762\u677F", className: "dwb-openbtn", onClick: () => setOpen(true) }, "\u5DE5\u4F5C\u9762\u677F");
+    return h6(TipButton, { tip: "\u5C55\u5F00\u5DE5\u4F5C\u9762\u677F", className: "dwb-openbtn", onClick: openPanel }, "\u5DE5\u4F5C\u9762\u677F");
   }
   const splitMode = selected !== null;
   return h6(
@@ -14592,7 +14700,7 @@ function WorkbenchPanel(props) {
         "div",
         {
           className: "dwb-resize-grip",
-          title: "\u5355\u51FB\u6536\u8D77\u9762\u677F"
+          title: width > PANEL_MIN ? "\u5355\u51FB\u7F29\u81F3\u6700\u7A84\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09" : "\u5355\u51FB\u6536\u8D77\u9762\u677F\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09"
         },
         h6("span", { className: "dwb-resize-arrow" }, h6(IconFrame, { size: 13 }, h6("path", { d: "M9 6l6 6-6 6" })))
       )
@@ -14628,7 +14736,7 @@ function WorkbenchPanel(props) {
           { tip: "\u5237\u65B0", className: "dwb-iconbtn", onClick: refresh, disabled: refreshing },
           h6("span", { className: refreshing ? "dwb-spin" : void 0 }, refreshIcon())
         ),
-        h6(TipButton, { tip: "\u6536\u8D77", className: "dwb-iconbtn", onClick: () => setOpen(false) }, closeIcon())
+        h6(TipButton, { tip: "\u6536\u8D77\uFF08\u518D\u6B21\u70B9\u51FB\u5173\u95ED\uFF09", className: "dwb-iconbtn", onClick: collapseOrHide }, closeIcon())
       ),
       h6(
         "div",
