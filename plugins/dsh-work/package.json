@@ -1,21 +1,22 @@
 {
   "name": "@bit-ark/dsh-work",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Right-docked workbench panel: file/dir tree with icons and click-to-preview (text/image/audio/video), plus git commit graph and basic git operations (stage/commit/ignore/init)",
   "type": "module",
-  "main": "index.js",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "client.js",
+    "lib",
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node test/classify.test.mjs && node test/preview.test.mjs"
+    "build": "node build.mjs",
+    "prepublishOnly": "node build.mjs",
+    "test": "node build.mjs && node test/classify.test.mjs && node test/preview.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -24,6 +25,9 @@
     "client": {
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   },
   "publishConfig": {
     "access": "public"

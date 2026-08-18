@@ -1,6 +1,7 @@
 /**
  * dsh-work 纯逻辑断言：文件预览分类 / MIME 映射 / 文本判定。
  * 与 dsh-balance 的纯折叠断言同模式：node:test + assert，无依赖。
+ * 跑在构建产物上：pnpm build && node test/classify.test.mjs（或直接 pnpm test）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -9,7 +10,8 @@ import {
   contentTypeFor,
   extensionOf,
   looksText,
-} from '../index.js'
+  validatedWriteContent,
+} from '../lib/index.js'
 
 test('extensionOf 提取小写扩展名', () => {
   assert.equal(extensionOf('README.md'), 'md')
@@ -58,4 +60,13 @@ test('looksText 按 NUL 嗅探判定', () => {
   lateNul.fill(0x61, 0, 8192)
   lateNul[8500] = 0
   assert.equal(looksText(lateNul), true)
+})
+
+test('validatedWriteContent 校验写文件内容', () => {
+  assert.deepEqual(validatedWriteContent('hello'), { content: 'hello' })
+  assert.deepEqual(validatedWriteContent(''), { content: '' })
+  assert.equal(validatedWriteContent(undefined).error, 'missing content')
+  assert.equal(validatedWriteContent(null).error, 'missing content')
+  assert.equal(validatedWriteContent(42).error, 'missing content')
+  assert.equal(validatedWriteContent('x'.repeat(1024 * 1024 + 1)).error, '内容超过 1MB 上限')
 })
