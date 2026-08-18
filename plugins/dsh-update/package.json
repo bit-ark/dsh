@@ -1,7 +1,6 @@
 {
-  "name": "dsh-update",
+  "name": "@bit-ark/dsh-update",
   "version": "0.1.0",
-  "private": true,
   "description": "DSH version badge with read-only remote update check in the sidebar footer",
   "type": "module",
   "main": "index.js",
@@ -22,5 +21,8 @@
     "client": {
       "platform": "web"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -1,7 +1,6 @@
 {
-  "name": "dsh-plugmgr",
+  "name": "@bit-ark/dsh-plugmgr",
   "version": "0.1.0",
-  "private": true,
   "description": "已安装插件管理器：在设置-插件里提供「插件管理」tab，管理 profile 里本地目录 / npm / Git 来源安装的插件（列出/添加/按名称安装/移除/禁用/启用/更新）。",
   "type": "module",
   "main": "index.js",
@@ -25,5 +24,8 @@
     "client": {
       "platform": "web"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

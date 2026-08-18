@@ -38,14 +38,13 @@ pnpm build     # 修改 src/ 后重新构建 lib/
 
 ## 安装（已完成则跳过）
 
-在 deepseek-harness checkout 目录执行（首次先把插件仓库 clone 到本地，已克隆可跳过）：
+在 deepseek-harness checkout 目录执行（插件已发布到 npm，按名安装即可）：
 
 ```sh
-git clone https://github.com/bit-ark/dsh.git dsh-plugins   # 首次
-pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-archive
+pnpm dsh plugin --profile web add @bit-ark/dsh-archive
 ```
 
-该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`
+该命令从 npm 拉取包并挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`
 由 `dsh plugin` 自动维护），之后每次 `pnpm dsh web` 启动都会加载本插件。
 
 ## 生效方式

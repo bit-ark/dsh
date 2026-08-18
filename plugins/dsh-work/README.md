@@ -65,14 +65,13 @@ test/preview.test.mjs  纯逻辑断言（高亮 token / markdown 渲染 / html �
 
 ## 安装（已完成则跳过）
 
-在 deepseek-harness checkout 目录执行（首次先把插件仓库 clone 到本地，已克隆可跳过）：
+在 deepseek-harness checkout 目录执行（插件已发布到 npm，按名安装即可）：
 
 ```sh
-git clone https://github.com/bit-ark/dsh.git dsh-plugins   # 首次
-pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-work
+pnpm dsh plugin --profile web add @bit-ark/dsh-work
 ```
 
-该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`
+该命令从 npm 拉取包并挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`
 由 `dsh plugin` 自动维护）。**重要**：本插件自带 bundle 层（cordis.patch.yml 插入
 workbench 行），挂进 bundles 后须把 profile 自己 `cordis.patch.yml` 里旧的 workbench
 手工 `insert` 删除，避免重复行 id。

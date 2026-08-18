@@ -36,11 +36,10 @@ if (notifier !== undefined) {
 
 ## 安装（已完成则跳过）
 
-在 deepseek-harness checkout 目录执行（首次先把插件仓库 clone 到本地，已克隆可跳过）：
+在 deepseek-harness checkout 目录执行（插件已发布到 npm，按名安装即可）：
 
 ```sh
-git clone https://github.com/bit-ark/dsh.git dsh-plugins   # 首次
-pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-notify
+pnpm dsh plugin --profile web add @bit-ark/dsh-notify
 ```
 
 ## 生效方式

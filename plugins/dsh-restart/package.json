@@ -1,7 +1,6 @@
 {
-  "name": "dsh-restart",
+  "name": "@bit-ark/dsh-restart",
   "version": "0.1.0",
-  "private": true,
   "description": "侧边栏一键重启 dsh web：两步确认后在原终端窗口重启服务（macOS Terminal.app）。",
   "type": "module",
   "main": "index.js",
@@ -22,5 +21,8 @@
     "client": {
       "platform": "web"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

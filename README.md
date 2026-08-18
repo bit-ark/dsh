@@ -1,18 +1,18 @@
 # dsh-plugins
 
-DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件**，每个插件都是可直接共享、独立安装的 npm 包（`dsh.bundle.patch` 自带组合层），通过本地目录安装进 profile。
+DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件**，每个插件都是可直接共享、独立安装的 npm 包（`@bit-ark/dsh-*`，`dsh.bundle.patch` 自带组合层），通过 npm 按名安装进 profile。
 
 ## 插件一览
 
-| 插件（目录 / 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
+| 插件（目录 / npm 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
 |---|---|---|---|---|
-| `dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
-| `dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
-| `dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
-| `dsh-notify` | 0.1.0 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
-| `dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
-| `dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
-| `dsh-work` | 1.0.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
+| `@bit-ark/dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
+| `@bit-ark/dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
+| `@bit-ark/dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
+| `@bit-ark/dsh-notify` | 0.1.0 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
+| `@bit-ark/dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
+| `@bit-ark/dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
+| `@bit-ark/dsh-work` | 1.0.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
 
 ## 目录结构
 
@@ -34,23 +34,31 @@ dsh-plugins/
 
 ## 安装
 
-在 deepseek-harness checkout 目录执行。首次先把本仓库 clone 到本地（已克隆
-可跳过），再逐个安装插件：
+插件已发布到 npm（`@bit-ark/dsh-*`），在 deepseek-harness checkout 目录按名安装即可，无需 clone 本仓库：
 
 ```sh
-# 首次：克隆插件仓库到 ./dsh-plugins（已克隆可跳过）
-git clone https://github.com/bit-ark/dsh.git dsh-plugins
-
 # 安装某个插件（如 dsh-archive），每个插件执行一次
-pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-archive
+pnpm dsh plugin --profile web add @bit-ark/dsh-archive
 ```
 
-该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles` 由 `dsh plugin` 自动维护）；之后每次 `pnpm dsh web` 启动都会加载。也可安装 dsh-plugmgr 后在浏览器「设置-插件-本地插件」页添加。
+该命令从 npm 拉取包并挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles` 由 `dsh plugin` 自动维护）；之后每次 `pnpm dsh web` 启动都会加载。也可安装 @bit-ark/dsh-plugmgr 后在浏览器「设置-插件-插件管理」页按名称安装其余插件。
+
+> 想从本仓库源码安装（开发调试）：clone 后 `pnpm dsh plugin --profile web add <仓库绝对路径>/plugins/dsh-xxx`（本地目录安装，`link:` 形式）。
 
 ## 构建与测试
 
-- TypeScript 插件（dsh-archive、dsh-balance）：`pnpm install` 后 `pnpm build` 生成 `lib/`（已随仓库提交，link: 安装开箱即用）；dsh-balance 另可 `pnpm test` 跑纯折叠断言。
+- TypeScript 插件（dsh-archive、dsh-balance）：`pnpm install` 后 `pnpm build` 生成 `lib/`（已随仓库提交）；dsh-balance 另可 `pnpm test` 跑纯折叠断言。
 - 纯 JS 插件（dsh-notify、dsh-update、dsh-plugmgr、dsh-work）：无需构建；dsh-plugmgr、dsh-work 另可 `pnpm test` 跑纯逻辑断言（spec 分类 / 文件分类与预览渲染）。
+
+## 发布到 npm
+
+```sh
+npm login                              # 首次，需 npm 账号
+cd plugins/<插件目录>
+npm publish                            # 每个插件一次（scoped 公共包，自动 --access public）
+```
+
+版本号按 semver 递增（`npm version patch|minor|major` 后 `npm publish`）。发布前先跑该插件 README 里的测试。全部 7 个包名已在 npm 上注册为 `@bit-ark/*` scope（`dsh-balance`/`dsh-notify`/`dsh-restart` 的裸名被其他开发者占用，故统一走 scoped 名）。
 
 ## 生效方式
 
@@ -59,7 +67,9 @@ pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-archive
 
 ## 命名约定
 
-统一为 `dsh-*` 前缀：文件夹名 == package.json `name` == 宿主导出 `name` == 组合行 id（cordis.patch.yml）== 客户端模块 id。修改任何一处时须同步其余各处。
+- **npm 包名**：`@bit-ark/dsh-*`（scoped 公共包，`publishConfig.access: public`）。
+- **内部标识**（与包名解耦，保持 `dsh-*` 短名）：文件夹名 == 宿主导出 `name` == 组合行 id（cordis.patch.yml）== 客户端模块 id。修改任何一处时须同步其余各处——与 harness 官方包模式一致（如 `@deepseek-ai/dsh-client-connection` 的包名带 scope，组合行 id 为短名 `client-connection`）。
+- 发布前需在 `package.json` 去掉 `private: true` 并加 `publishConfig: { access: "public" }`（scoped 包默认私有，必须显式公开）。
 
 > 唯一例外：dsh-work 因历史原因组合行 id 仍为 `workbench`（内部行 id，包名 / 模块 id 均为 `dsh-work`）。
 

@@ -1,7 +1,6 @@
 {
-  "name": "dsh-work",
+  "name": "@bit-ark/dsh-work",
   "version": "1.0.0",
-  "private": true,
   "description": "Right-docked workbench panel: file/dir tree with icons and click-to-preview (text/image/audio/video), plus git commit graph and basic git operations (stage/commit/ignore/init)",
   "type": "module",
   "main": "index.js",
@@ -25,5 +24,8 @@
     "client": {
       "platform": "web"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
