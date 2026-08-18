@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-archive",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Adds a 归档 (Archive) tab after the Trajectory tab: lists the current project's archived sessions with restore (unarchive) and hard delete.",
   "type": "module",
   "main": "lib/index.js",
