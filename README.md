@@ -34,10 +34,15 @@ dsh-plugins/
 
 ## 安装
 
-把本仓库 clone 到本地后，在 deepseek-harness checkout 目录执行（每个插件一次）：
+在 deepseek-harness checkout 目录执行。首次先把本仓库 clone 到本地（已克隆
+可跳过），再逐个安装插件：
 
 ```sh
-pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-<插件名>
+# 首次：克隆插件仓库到 ./dsh-plugins（已克隆可跳过）
+git clone https://github.com/bit-ark/dsh.git dsh-plugins
+
+# 安装某个插件（如 dsh-archive），每个插件执行一次
+pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-archive
 ```
 
 该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles` 由 `dsh plugin` 自动维护）；之后每次 `pnpm dsh web` 启动都会加载。也可安装 dsh-plugmgr 后在浏览器「设置-插件-本地插件」页添加。

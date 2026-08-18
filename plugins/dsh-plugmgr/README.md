@@ -50,10 +50,11 @@ config:
 
 ## 构建 / 安装 / 测试
 
-纯 JS 插件无需构建。安装（已完成则跳过）：
+纯 JS 插件无需构建。安装（已完成则跳过；首次先把插件仓库 clone 到本地）：
 
 ```sh
-pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-plugmgr
+git clone https://github.com/bit-ark/dsh.git dsh-plugins   # 首次
+pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-plugmgr
 pnpm test   # 在插件目录跑 specKind 分类断言
 ```
 

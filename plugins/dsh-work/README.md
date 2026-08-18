@@ -65,10 +65,11 @@ test/preview.test.mjs  纯逻辑断言（高亮 token / markdown 渲染 / html �
 
 ## 安装（已完成则跳过）
 
-在 deepseek-harness checkout 目录执行：
+在 deepseek-harness checkout 目录执行（首次先把插件仓库 clone 到本地，已克隆可跳过）：
 
 ```sh
-pnpm dsh plugin --profile web add <仓库克隆路径>/plugins/dsh-work
+git clone https://github.com/bit-ark/dsh.git dsh-plugins   # 首次
+pnpm dsh plugin --profile web add ./dsh-plugins/plugins/dsh-work
 ```
 
 该命令把包以 `link:` 形式挂进 `~/.dsh/profiles/web`（依赖与 `dsh.profile.bundles`
