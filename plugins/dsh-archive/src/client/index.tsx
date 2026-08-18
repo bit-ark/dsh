@@ -18,8 +18,8 @@
  *    列表，让侧边栏立即消失、不残留幽灵条目。
  *  - 一键删除：面板底部 footer 区域的按钮，确认后 POST
  *    /dsh-archive/delete-all——把当前项目全部已归档会话一次性批量硬删除
- *    （宿主侧跳过运行中的会话），成功后同样刷新两个列表并显示汇总
- *    （删除 / 跳过 / 失败计数与失败明细）。
+ *    （宿主侧跳过运行中的会话），成功后同样刷新两个列表；不再显示成功汇总
+ *    （"删除即删除"），仅当有会话删除失败时在错误横幅里给出失败明细。
  *
  * 「当前项目」不依赖任何打开的会话即可解析：最近活跃的 workspace → 持有
  * 当前会话的 workspace 账目 → 当前会话 cwd 对应的 workspace。行数据全部来自
@@ -378,48 +378,22 @@ export function apply(ctx: any): void {
       lineHeight: '1',
       cursor: 'pointer',
     },
-    footerHint: {
-      flex: 1,
-      minWidth: 0,
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
-      color: 'var(--dsw-alias-label-tertiary)',
-      fontSize: '12px',
-      lineHeight: '16px',
-    },
     panelFooter: {
       flex: 'none',
       display: 'flex',
       alignItems: 'center',
+      justifyContent: 'flex-end',
       gap: '8px',
       minHeight: '44px',
       padding: '0 12px',
       boxSizing: 'border-box',
       borderTop: '1px solid var(--dsw-alias-border-l2)',
     },
-    notice: {
-      padding: '8px 12px',
-      marginBottom: '8px',
-      borderRadius: '8px',
-      border: '1px solid var(--dsw-alias-border-l2)',
-      background: 'var(--dsw-alias-bg-base)',
-      color: 'var(--dsw-alias-label-primary)',
-      fontSize: '12px',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-all',
-    },
     panelBody: {
       flex: 1,
       minHeight: 0,
       overflowY: 'auto',
       padding: '8px 12px 12px',
-    },
-    hint: {
-      color: 'var(--dsw-alias-label-tertiary)',
-      fontSize: '12px',
-      lineHeight: '18px',
-      margin: '4px 0 8px',
     },
     error: {
       padding: '8px 12px',
@@ -490,7 +464,6 @@ export function apply(ctx: any): void {
     const [busy, setBusy] = useState<{ id: string; action: 'restore' | 'delete' } | null>(null)
     const [batchBusy, setBatchBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [notice, setNotice] = useState<string | null>(null)
     const panelRef = useRef<HTMLDivElement | null>(null)
     const triggerRef = useRef<HTMLButtonElement | null>(null)
     // 同步在途守卫：setBusy 要等下一次渲染才禁用按钮，同一 tick 里的第二次
@@ -498,6 +471,11 @@ export function apply(ctx: any): void {
     // 立即拦截，杜绝双击双发（批量删除会双计数、下载会双发 HEAD+GET）。
     const busyRef = useRef(false)
     const batchBusyRef = useRef(false)
+    /** 关闭面板并清空错误横幅：错误提示只在当次打开的面板里停留，重开即干净。 */
+    const closePanel = (): void => {
+      setError(null)
+      setOpen(false)
+    }
 
     // 不依赖打开会话解析当前项目：最近活跃 workspace → 持有当前会话的
     // workspace → 当前会话 cwd 对应的 workspace。
@@ -555,13 +533,17 @@ export function apply(ctx: any): void {
     useEffect(() => {
       if (!open) return
       const onKey = (event: KeyboardEvent): void => {
-        if (event.key === 'Escape') setOpen(false)
+        if (event.key === 'Escape') {
+          setError(null)
+          setOpen(false)
+        }
       }
       const onPointerDown = (event: MouseEvent): void => {
         const target = event.target as Node | null
         if (target === null) return
         if (panelRef.current?.contains(target) === true) return
         if (triggerRef.current?.contains(target) === true) return
+        setError(null)
         setOpen(false)
       }
       document.addEventListener('keydown', onKey)
@@ -584,7 +566,6 @@ export function apply(ctx: any): void {
       if (busyRef.current) return
       busyRef.current = true
       setError(null)
-      setNotice(null)
       setBusy({ id, action })
       try {
         await callHost(action, { sessionId: id })
@@ -625,7 +606,6 @@ export function apply(ctx: any): void {
       if (batchBusyRef.current) return
       batchBusyRef.current = true
       setError(null)
-      setNotice(null)
       setBatchBusy(true)
       void (async () => {
         try {
@@ -649,14 +629,18 @@ export function apply(ctx: any): void {
             const chunkFailures = payload.failures
             if (chunkFailures !== undefined && chunkFailures.length > 0) failures.push(...chunkFailures)
           }
-          const parts: string[] = [`已删除 ${deleted} 个`]
-          if (skipped > 0) parts.push(`跳过运行中 ${skipped} 个`)
-          if (failed > 0) parts.push(`失败 ${failed} 个`)
-          let message = parts.join('，')
-          if (failures.length > 0) {
-            message += `：${failures.map(item => `${item.sessionId}（${item.error}）`).join('；')}`
+          // 成功后不再显示汇总提示（"删除即删除"，面板保持干净）；仅当有会话
+          // 删除失败时把失败明细放进错误横幅，避免静默失败。跳过运行中属于
+          // 确认框里已预告的正常结果，不提示。
+          if (failed > 0) {
+            const parts: string[] = [`已删除 ${deleted} 个`, `失败 ${failed} 个`]
+            if (skipped > 0) parts.push(`跳过运行中 ${skipped} 个`)
+            let message = parts.join('，')
+            if (failures.length > 0) {
+              message += `：${failures.map(item => `${item.sessionId}（${item.error}）`).join('；')}`
+            }
+            setError(message)
           }
-          setNotice(message)
           // 删除后主动刷新：sessions 列表（会话消失）+ workspaces 列表
           // （workspace 账目已解除，避免侧边栏残留幽灵条目）。
           ctx.sessions.refresh?.().catch?.(() => {})
@@ -673,7 +657,7 @@ export function apply(ctx: any): void {
     const openSession = (id: string): void => {
       try {
         ctx.sessions.open(id)
-        setOpen(false)
+        closePanel()
       } catch {
         // 行在列表刷新时消失的竞态：下一次渲染自然清掉。
       }
@@ -697,17 +681,13 @@ export function apply(ctx: any): void {
                 className="dsh-archive-close"
                 style={styles.close}
                 aria-label="关闭"
-                onClick={() => { setOpen(false) }}
+                onClick={() => { closePanel() }}
               >
                 ✕
               </button>
             </header>
             <div style={styles.panelBody}>
-              <div style={styles.hint}>
-                仅显示当前项目的归档。下载会导出该会话的日志 ZIP；恢复会把会话放回侧边栏；删除会永久移除会话的全部文件，无法恢复。
-              </div>
               {error !== null ? <div style={styles.error}>{error}</div> : null}
-              {notice !== null ? <div style={styles.notice}>{notice}</div> : null}
               {rows.length === 0
                 ? <div style={styles.empty}>当前项目没有已归档的会话</div>
                 : null}
@@ -775,11 +755,6 @@ export function apply(ctx: any): void {
               })}
             </div>
             <footer style={styles.panelFooter}>
-              <span style={styles.footerHint}>
-                {rows.length === 0
-                  ? '当前项目没有已归档的会话'
-                  : `共 ${rows.length} 个归档会话（运行中的会跳过）`}
-              </span>
               <button
                 type="button"
                 className="dsh-archive-batch"
@@ -788,9 +763,6 @@ export function apply(ctx: any): void {
                   opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1,
                 }}
                 disabled={batchBusy || busy !== null || rows.length === 0}
-                title={rows.length === 0
-                  ? '当前项目没有已归档的会话'
-                  : `一键删除当前项目全部 ${rows.length} 个已归档会话（运行中的会跳过）`}
                 onClick={() => { deleteAll() }}
               >
                 {batchBusy ? '删除中…' : '一键删除'}
@@ -807,7 +779,7 @@ export function apply(ctx: any): void {
           aria-label={`已归档会话（${String(rows.length)}）`}
           aria-expanded={open}
           title={wide ? undefined : `已归档会话（${String(rows.length)}）`}
-          onClick={() => { setOpen(value => !value) }}
+          onClick={() => { if (open) closePanel(); else setOpen(true) }}
         >
           <ArchiveIcon size={wide ? 16 : 18} />
           {wide && (

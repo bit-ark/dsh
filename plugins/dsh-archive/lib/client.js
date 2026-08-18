@@ -290,48 +290,22 @@ function apply(ctx) {
       lineHeight: "1",
       cursor: "pointer"
     },
-    footerHint: {
-      flex: 1,
-      minWidth: 0,
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-      color: "var(--dsw-alias-label-tertiary)",
-      fontSize: "12px",
-      lineHeight: "16px"
-    },
     panelFooter: {
       flex: "none",
       display: "flex",
       alignItems: "center",
+      justifyContent: "flex-end",
       gap: "8px",
       minHeight: "44px",
       padding: "0 12px",
       boxSizing: "border-box",
       borderTop: "1px solid var(--dsw-alias-border-l2)"
     },
-    notice: {
-      padding: "8px 12px",
-      marginBottom: "8px",
-      borderRadius: "8px",
-      border: "1px solid var(--dsw-alias-border-l2)",
-      background: "var(--dsw-alias-bg-base)",
-      color: "var(--dsw-alias-label-primary)",
-      fontSize: "12px",
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-all"
-    },
     panelBody: {
       flex: 1,
       minHeight: 0,
       overflowY: "auto",
       padding: "8px 12px 12px"
-    },
-    hint: {
-      color: "var(--dsw-alias-label-tertiary)",
-      fontSize: "12px",
-      lineHeight: "18px",
-      margin: "4px 0 8px"
     },
     error: {
       padding: "8px 12px",
@@ -399,11 +373,14 @@ function apply(ctx) {
     const [busy, setBusy] = (0, import_react.useState)(null);
     const [batchBusy, setBatchBusy] = (0, import_react.useState)(false);
     const [error, setError] = (0, import_react.useState)(null);
-    const [notice, setNotice] = (0, import_react.useState)(null);
     const panelRef = (0, import_react.useRef)(null);
     const triggerRef = (0, import_react.useRef)(null);
     const busyRef = (0, import_react.useRef)(false);
     const batchBusyRef = (0, import_react.useRef)(false);
+    const closePanel = () => {
+      setError(null);
+      setOpen(false);
+    };
     const workspace = (0, import_react.useMemo)(() => {
       const items = workspaces?.items;
       if (items === void 0 || items.length === 0) return void 0;
@@ -448,13 +425,17 @@ function apply(ctx) {
     (0, import_react.useEffect)(() => {
       if (!open) return;
       const onKey = (event) => {
-        if (event.key === "Escape") setOpen(false);
+        if (event.key === "Escape") {
+          setError(null);
+          setOpen(false);
+        }
       };
       const onPointerDown = (event) => {
         const target = event.target;
         if (target === null) return;
         if (panelRef.current?.contains(target) === true) return;
         if (triggerRef.current?.contains(target) === true) return;
+        setError(null);
         setOpen(false);
       };
       document.addEventListener("keydown", onKey);
@@ -472,7 +453,6 @@ function apply(ctx) {
       if (busyRef.current) return;
       busyRef.current = true;
       setError(null);
-      setNotice(null);
       setBusy({ id, action });
       try {
         await callHost(action, { sessionId: id });
@@ -510,7 +490,6 @@ function apply(ctx) {
       if (batchBusyRef.current) return;
       batchBusyRef.current = true;
       setError(null);
-      setNotice(null);
       setBatchBusy(true);
       void (async () => {
         try {
@@ -528,14 +507,15 @@ function apply(ctx) {
             const chunkFailures = payload.failures;
             if (chunkFailures !== void 0 && chunkFailures.length > 0) failures.push(...chunkFailures);
           }
-          const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`];
-          if (skipped > 0) parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A`);
-          if (failed > 0) parts.push(`\u5931\u8D25 ${failed} \u4E2A`);
-          let message = parts.join("\uFF0C");
-          if (failures.length > 0) {
-            message += `\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
+          if (failed > 0) {
+            const parts = [`\u5DF2\u5220\u9664 ${deleted} \u4E2A`, `\u5931\u8D25 ${failed} \u4E2A`];
+            if (skipped > 0) parts.push(`\u8DF3\u8FC7\u8FD0\u884C\u4E2D ${skipped} \u4E2A`);
+            let message = parts.join("\uFF0C");
+            if (failures.length > 0) {
+              message += `\uFF1A${failures.map((item) => `${item.sessionId}\uFF08${item.error}\uFF09`).join("\uFF1B")}`;
+            }
+            setError(message);
           }
-          setNotice(message);
           ctx.sessions.refresh?.().catch?.(() => {
           });
           ctx.workspaces.refresh?.().catch?.(() => {
@@ -551,7 +531,7 @@ function apply(ctx) {
     const openSession = (id) => {
       try {
         ctx.sessions.open(id);
-        setOpen(false);
+        closePanel();
       } catch {
       }
     };
@@ -577,16 +557,14 @@ function apply(ctx) {
                   style: styles.close,
                   "aria-label": "\u5173\u95ED",
                   onClick: () => {
-                    setOpen(false);
+                    closePanel();
                   },
                   children: "\u2715"
                 }
               )
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.panelBody, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.hint, children: "\u4EC5\u663E\u793A\u5F53\u524D\u9879\u76EE\u7684\u5F52\u6863\u3002\u4E0B\u8F7D\u4F1A\u5BFC\u51FA\u8BE5\u4F1A\u8BDD\u7684\u65E5\u5FD7 ZIP\uFF1B\u6062\u590D\u4F1A\u628A\u4F1A\u8BDD\u653E\u56DE\u4FA7\u8FB9\u680F\uFF1B\u5220\u9664\u4F1A\u6C38\u4E45\u79FB\u9664\u4F1A\u8BDD\u7684\u5168\u90E8\u6587\u4EF6\uFF0C\u65E0\u6CD5\u6062\u590D\u3002" }),
               error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.error, children: error }) : null,
-              notice !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.notice, children: notice }) : null,
               rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.empty, children: "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" }) : null,
               rows.map((row) => {
                 const rowBusy = busy !== null && busy.id === row.id;
@@ -665,26 +643,22 @@ function apply(ctx) {
                 ] }, row.id);
               })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", { style: styles.panelFooter, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.footerHint, children: rows.length === 0 ? "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" : `\u5171 ${rows.length} \u4E2A\u5F52\u6863\u4F1A\u8BDD\uFF08\u8FD0\u884C\u4E2D\u7684\u4F1A\u8DF3\u8FC7\uFF09` }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                "button",
-                {
-                  type: "button",
-                  className: "dsh-archive-batch",
-                  style: {
-                    ...styles.batchDelete,
-                    opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1
-                  },
-                  disabled: batchBusy || busy !== null || rows.length === 0,
-                  title: rows.length === 0 ? "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" : `\u4E00\u952E\u5220\u9664\u5F53\u524D\u9879\u76EE\u5168\u90E8 ${rows.length} \u4E2A\u5DF2\u5F52\u6863\u4F1A\u8BDD\uFF08\u8FD0\u884C\u4E2D\u7684\u4F1A\u8DF3\u8FC7\uFF09`,
-                  onClick: () => {
-                    deleteAll();
-                  },
-                  children: batchBusy ? "\u5220\u9664\u4E2D\u2026" : "\u4E00\u952E\u5220\u9664"
-                }
-              )
-            ] })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", { style: styles.panelFooter, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "button",
+              {
+                type: "button",
+                className: "dsh-archive-batch",
+                style: {
+                  ...styles.batchDelete,
+                  opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1
+                },
+                disabled: batchBusy || busy !== null || rows.length === 0,
+                onClick: () => {
+                  deleteAll();
+                },
+                children: batchBusy ? "\u5220\u9664\u4E2D\u2026" : "\u4E00\u952E\u5220\u9664"
+              }
+            ) })
           ]
         }
       ),
@@ -700,7 +674,8 @@ function apply(ctx) {
           "aria-expanded": open,
           title: wide ? void 0 : `\u5DF2\u5F52\u6863\u4F1A\u8BDD\uFF08${String(rows.length)}\uFF09`,
           onClick: () => {
-            setOpen((value) => !value);
+            if (open) closePanel();
+            else setOpen(true);
           },
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArchiveIcon, { size: wide ? 16 : 18 }),
