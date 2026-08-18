@@ -6,13 +6,13 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 
 | 插件（目录 / npm 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
 |---|---|---|---|---|
-| `@bit-ark/dsh-archive` | 0.1.0 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
+| `@bit-ark/dsh-archive` | 0.1.1 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
 | `@bit-ark/dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
 | `@bit-ark/dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
-| `@bit-ark/dsh-notify` | 0.1.0 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
+| `@bit-ark/dsh-notify` | 0.1.1 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
 | `@bit-ark/dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
 | `@bit-ark/dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
-| `@bit-ark/dsh-work` | 1.0.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
+| `@bit-ark/dsh-work` | 1.1.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ 源码编辑与保存 + Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/write \| /open \| /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
 
 ## 目录结构
 
@@ -27,7 +27,7 @@ dsh-plugins/
     ├── dsh-notify/          # 纯 JavaScript
     ├── dsh-restart/         # 纯 JavaScript
     ├── dsh-update/          # 纯 JavaScript
-    └── dsh-work/            # 纯 JavaScript，含测试
+    └── dsh-work/            # JavaScript（src/ 构建，产物在 lib/），含测试
 ```
 
 每个插件是独立的 npm 包，彼此互不依赖，各自目录下带有自己的 README。
@@ -47,8 +47,11 @@ pnpm dsh plugin --profile web add @bit-ark/dsh-archive
 
 ## 构建与测试
 
-- TypeScript 插件（dsh-archive、dsh-balance）：`pnpm install` 后 `pnpm build` 生成 `lib/`（已随仓库提交）；dsh-balance 另可 `pnpm test` 跑纯折叠断言。
-- 纯 JS 插件（dsh-notify、dsh-update、dsh-plugmgr、dsh-work）：无需构建；dsh-plugmgr、dsh-work 另可 `pnpm test` 跑纯逻辑断言（spec 分类 / 文件分类与预览渲染）。
+- 构建插件（dsh-archive、dsh-balance、dsh-work）：`pnpm install` 后 `pnpm build` 生成
+  `lib/`（已随仓库提交）；dsh-balance 另可 `pnpm test` 跑纯折叠断言，dsh-work 的
+  `pnpm test` 会先构建再跑纯逻辑断言（文件分类 / 预览渲染）。
+- 纯 JS 插件（dsh-notify、dsh-update、dsh-plugmgr）：无需构建；dsh-plugmgr 另可
+  `pnpm test` 跑纯逻辑断言（spec 分类）。
 
 ## 发布到 npm
 
@@ -63,7 +66,7 @@ npm publish                            # 每个插件一次（scoped 公共包�
 ## 生效方式
 
 - 宿主半改动：重建后重启 `pnpm dsh web`（路由在进程启动时注册）。
-- 客户端半改动：`pnpm build`（TS 插件）后刷新页面即可（重启更稳妥）。dev:web watcher 不覆盖树外插件，属预期行为。
+- 客户端半改动：`pnpm build`（构建插件：dsh-archive、dsh-balance、dsh-work）后刷新页面即可（重启更稳妥）。dev:web watcher 不覆盖树外插件，属预期行为。
 
 ## 命名约定
 
