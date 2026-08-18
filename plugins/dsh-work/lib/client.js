@@ -14301,6 +14301,7 @@ function WorkbenchPanel(props) {
       cancelAnimationFrame(tweenRef.current);
       tweenRef.current = null;
     }
+    tweeningRef.current = false;
   };
   const animateWidthTo = (target, options = {}) => {
     const { floor = PANEL_MIN, duration = 300, persist = false, onEnd } = options;
@@ -14314,11 +14315,18 @@ function WorkbenchPanel(props) {
       return;
     }
     const from = widthRef.current;
+    if (from === target) {
+      tweeningRef.current = false;
+      if (persist) writeStored(WIDTH_KEY, target);
+      if (onEnd !== void 0) onEnd();
+      return;
+    }
     const start = performance.now();
     const step = (now) => {
       const t = Math.min(1, (now - start) / duration);
       const eased = cubicBezierEase(t);
-      setWidth(clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor));
+      const next = clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor);
+      if (next !== widthRef.current) setWidth(next);
       if (t < 1) {
         tweenRef.current = requestAnimationFrame(step);
       } else {
@@ -14370,7 +14378,7 @@ function WorkbenchPanel(props) {
     if (!tweeningRef.current) debouncedWrite(WIDTH_KEY, width);
   }, [width]);
   useEffect2(() => {
-    debouncedWrite(SPLIT_KEY, treeWidth);
+    if (!tweeningRef.current) debouncedWrite(SPLIT_KEY, treeWidth);
   }, [treeWidth]);
   const prevWidthRef = useRef3(width);
   useEffect2(() => {

@@ -4,7 +4,7 @@
 import React from 'react'
 import { TipButton } from './tip.js'
 import { AUTO_WIDEN, CONTENT_MIN, PANEL_DEFAULT, PANEL_MIN, SPLIT_KEY, TREE_DEFAULT, TREE_MIN, WIDTH_KEY, clampPanelWidth, clampTreeWidth, cubicBezierEase, findNode, messageOf, panelActionFor, patchNode, readStored, toNode, writeStored } from './helpers.js'
-import { chevronIcon, closeIcon, IconFrame, refreshIcon } from './icons.js'
+import { closeIcon, IconFrame, refreshIcon } from './icons.js'
 import { FilesView } from './files-view.js'
 import { FilePreview } from './preview.js'
 import { GitView } from './git-view.js'
@@ -77,10 +77,14 @@ const { useState, useEffect, useCallback, useRef } = React
 			const tweenRef = useRef(null);
 			const tweeningRef = useRef(false);
 			const stopTween = () => {
+				// 中断动画：取消 rAF 后 onEnd 不再触发（滑出/收窄以中断点为终点）。
+				// 必须同时复位动画标志——否则动画中途被抓手柄打断后，tweeningRef
+				// 恒为 true，后续拖拽的宽度变更会一直跳过持久化（刷新后宽度回退）。
 				if (tweenRef.current !== null) {
 					cancelAnimationFrame(tweenRef.current);
 					tweenRef.current = null;
 				}
+				tweeningRef.current = false;
 			};
 			const animateWidthTo = (target, options = {}) => {
 				const { floor = PANEL_MIN, duration = 300, persist = false, onEnd } = options;
@@ -95,11 +99,21 @@ const { useState, useEffect, useCallback, useRef } = React
 					return;
 				}
 				const from = widthRef.current;
+				// 目标与当前一致（已最窄再收窄、已默认宽再双击重置）：无需动画，
+				// 直接走完成逻辑（落盘/onEnd），避免空跑 300ms。
+				if (from === target) {
+					tweeningRef.current = false;
+					if (persist) writeStored(WIDTH_KEY, target);
+					if (onEnd !== undefined) onEnd();
+					return;
+				}
 				const start = performance.now();
 				const step = (now) => {
 					const t = Math.min(1, (now - start) / duration);
 					const eased = cubicBezierEase(t);
-					setWidth(clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor));
+					// 与当前渲染值一致时跳过 setWidth，避免无意义的重复渲染。
+					const next = clampPanelWidth(from + (target - from) * eased, maxWidthRef.current, floor);
+					if (next !== widthRef.current) setWidth(next);
 					if (t < 1) {
 						tweenRef.current = requestAnimationFrame(step);
 					} else {
@@ -154,8 +168,12 @@ const { useState, useEffect, useCallback, useRef } = React
 					});
 				});
 			};
+			// 面板宽度持久化：动画中间帧不落盘（tweeningRef 为真时跳过），由
+			// tween 结束时按 persist 显式写最终值；拖拽期间的常规变更仍走防抖。
 			useEffect(() => { if (!tweeningRef.current) debouncedWrite(WIDTH_KEY, width); }, [width]);
-			useEffect(() => { debouncedWrite(SPLIT_KEY, treeWidth); }, [treeWidth]);
+			// 树栏宽度在滑出/滑入动画中会被短暂钳到 0——动画期间同样不落盘，
+			// 由 onEnd 复原后的最终值（≥40px）持久化，避免残留 0 宽分栏。
+			useEffect(() => { if (!tweeningRef.current) debouncedWrite(SPLIT_KEY, treeWidth); }, [treeWidth]);
 			// 两栏常驻下，面板变窄（拖窄/双击重置/窗口缩放）时树宽必须同步
 			// 钳回 [TREE_MIN, 面板宽−CONTENT_MIN]，否则树会把内容区挤没。
 			// 只在面板变窄时收紧；变宽时保持当前树宽（用户拖过的值不自动放宽）。
