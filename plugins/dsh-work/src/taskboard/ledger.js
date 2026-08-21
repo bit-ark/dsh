@@ -637,11 +637,24 @@ export class TaskboardLedger {
           try { unlinkSync(this.lockFile) } catch { /* 尽力清理 */ }
         }
         if (error.code !== 'EEXIST') throw error
+        let raw
+        try { raw = readFileSync(this.lockFile, 'utf8') } catch (readError) {
+          if (readError.code === 'ENOENT') continue // 读取瞬间被别的实例清掉：直接重试创建
+          throw readError
+        }
+        if (raw.trim() === '') {
+          // 零字节锁：持锁进程在 openSync('wx') 成功与写入之间崩溃（或掉电）的
+          // 残留——没有任何进程写得过内容，也就不可能是活锁，直接接管重试。
+          try { unlinkSync(this.lockFile) } catch (unlinkError) {
+            if (unlinkError.code !== 'ENOENT') throw unlinkError
+          }
+          continue
+        }
         let pid
         let ownerStartedAt
         let ownerExact = false
         try {
-          const owner = JSON.parse(readFileSync(this.lockFile, 'utf8'))
+          const owner = JSON.parse(raw)
           if (typeof owner.pid === 'number') pid = owner.pid
           if (typeof owner.startedAt === 'number') ownerStartedAt = owner.startedAt
           ownerExact = owner.probe === 'exact'

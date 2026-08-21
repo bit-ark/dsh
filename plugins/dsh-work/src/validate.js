@@ -63,16 +63,24 @@ export function readJsonBody(req) {
       try { resolve(JSON.parse(data === '' ? '{}' : data)) } catch { resolve({}) }
     })
     req.on('error', () => resolve({}))
+    // 客户端中途断开：'end' 不会再来（Node 16+ 发 'aborted'/'close'），
+    // 不兜底则 Promise 永不 resolve、路由 handler 挂起。resolve 幂等，
+    // 正常结束后再触发的 'close' 不会覆盖已有结果。
+    req.on('aborted', () => resolve({}))
+    req.on('close', () => resolve({}))
   })
 }
 
 /**
- * Read a larger JSON body for the write route (content up to MAX_TEXT_EDIT
- * plus JSON envelope slack). Oversized bodies resolve `null` (the route
- * reports the size limit instead of letting the payload pile up in memory).
+ * Read a larger JSON body for the write route. Oversized bodies resolve
+ * `null` (the route reports the size limit instead of letting the payload
+ * pile up in memory). CAP 必须覆盖 JSON 最坏转义膨胀：内容里全是需 \uXXXX
+ * 转义的字符时 1 字节内容 → 6 字节 JSON，所以取 6 倍 + 信封余量；内容本身
+ * 仍由 validatedWriteContent 限 1MB，这里只是放宽读取上界，避免 1MB 边界
+ * 的合法内容因转义膨胀被误判超限。
  */
 export function readWriteJsonBody(req) {
-  const CAP = MAX_TEXT_EDIT + 16 * 1024
+  const CAP = MAX_TEXT_EDIT * 6 + 16 * 1024
   return new Promise((resolve) => {
     let data = ''
     let tooBig = false
@@ -85,5 +93,8 @@ export function readWriteJsonBody(req) {
       try { resolve(JSON.parse(data === '' ? '{}' : data)) } catch { resolve({}) }
     })
     req.on('error', () => resolve({}))
+    // 客户端中途断开兜底（同 readJsonBody）。
+    req.on('aborted', () => resolve({}))
+    req.on('close', () => resolve({}))
   })
 }

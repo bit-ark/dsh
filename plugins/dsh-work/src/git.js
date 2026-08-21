@@ -9,7 +9,9 @@ import { join } from 'node:path'
 const TIMEOUT_MS = 8_000
 /** Graph bound; matches the panel's "recent history" contract. */
 const MAX_GRAPH = 60
-/** stdout capture bound per command (tail kept by string slice at the cap). */
+/** stdout capture bound per command. Chunks are kept whole from the head until
+ * the running byte count passes the cap; later chunks are dropped entirely
+ * (no partial-chunk slicing, so captured text ends on a chunk boundary). */
 const MAX_OUTPUT = 512 * 1024
 
 /** Run one git command; never throws, settles { ok, stdout, stderr, error }. */
@@ -113,7 +115,11 @@ export async function inspect(cwd, showIgnored = false) {
       '--pretty=tformat:%x1e%h%x1f%at%x1f%an%x1f%s',
     ]),
     (() => {
-      const statusArgs = ['--no-optional-locks', 'status', '--porcelain=v1']
+      // -c core.quotepath=false：默认 quotepath=true 会把非 ASCII 路径（如中文
+      // 文件名）转义成 "\346\226\207…" 八进制引号形式——UI 显示转义串、再把它
+      // 发回 git add/restore 时 pathspec 不匹配，中文文件的暂存/忽略全线失败。
+      // 关掉后 porcelain 输出原始 UTF-8 路径。-c 是 git 全局选项，必须在子命令前。
+      const statusArgs = ['-c', 'core.quotepath=false', '--no-optional-locks', 'status', '--porcelain=v1']
       if (showIgnored) statusArgs.push('--ignored')
       return runGit(cwd, statusArgs)
     })(),
@@ -183,6 +189,22 @@ export async function removeIgnore(cwd, relPath) {
     return { ok: false, error: `未在 .gitignore 中找到 ${relPath}` }
   }
   await writeFile(gitIgnorePath, kept.join('\n').replace(/\n+$/, '') + '\n', 'utf8')
+  return { ok: true }
+}
+
+/**
+ * Unstage one path. Fresh repos have no HEAD yet, and there
+ * `git restore --staged` dies with `fatal: could not resolve HEAD` —
+ * fall back to the unborn-HEAD equivalent `git rm --cached` (same
+ * strategy VS Code uses). Never throws.
+ * @returns {Promise<{ok: true} | {ok: false, error: string}>}
+ */
+export async function unstagePath(cwd, relPath) {
+  const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  const result = head.ok
+    ? await runGit(cwd, ['restore', '--staged', '--', relPath])
+    : await runGit(cwd, ['rm', '--cached', '--', relPath])
+  if (!result.ok) return { ok: false, error: failureReason(result, '取消暂存失败') }
   return { ok: true }
 }
 

@@ -108,7 +108,7 @@ async function inspect(cwd, showIgnored = false) {
       "--pretty=tformat:%x1e%h%x1f%at%x1f%an%x1f%s"
     ]),
     (() => {
-      const statusArgs = ["--no-optional-locks", "status", "--porcelain=v1"];
+      const statusArgs = ["-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain=v1"];
       if (showIgnored) statusArgs.push("--ignored");
       return runGit(cwd, statusArgs);
     })()
@@ -178,6 +178,12 @@ async function removeIgnore(cwd, relPath) {
   await writeFile(gitIgnorePath, kept.join("\n").replace(/\n+$/, "") + "\n", "utf8");
   return { ok: true };
 }
+async function unstagePath(cwd, relPath) {
+  const head = await runGit(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const result = head.ok ? await runGit(cwd, ["restore", "--staged", "--", relPath]) : await runGit(cwd, ["rm", "--cached", "--", relPath]);
+  if (!result.ok) return { ok: false, error: failureReason(result, "\u53D6\u6D88\u6682\u5B58\u5931\u8D25") };
+  return { ok: true };
+}
 function failureReason(result, fallback) {
   if (result.stderr.trim() !== "") {
     const stderr = result.stderr.trim();
@@ -193,7 +199,7 @@ function failureReason(result, fallback) {
 import { readdirSync, statSync } from "node:fs";
 import { spawn as spawn2 } from "node:child_process";
 import { join as join2 } from "node:path";
-import { open, realpath, rename, rm, writeFile as writeFile2 } from "node:fs/promises";
+import { open, realpath, rename, rm } from "node:fs/promises";
 function listDir(absPath) {
   let dirents;
   try {
@@ -405,7 +411,13 @@ async function writeFileAtomic(absPath, content) {
   }
   const tmpPath = `${target}.dwb-tmp-${process.pid}-${Date.now()}`;
   try {
-    await writeFile2(tmpPath, content, { encoding: "utf8", mode: stat.mode & 511 });
+    const fh = await open(tmpPath, "w", stat.mode & 511);
+    try {
+      await fh.writeFile(content, "utf8");
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
     await rename(tmpPath, target);
   } catch (error) {
     try {
@@ -448,7 +460,11 @@ function openInEditor(absPath) {
     };
     const fallback = () => {
       try {
-        spawn2("open", ["-a", "Visual Studio Code", absPath], { stdio: "ignore" }).on("error", () => finish(false, "\u672A\u627E\u5230 VS Code\uFF0C\u5DF2\u5C1D\u8BD5\u7CFB\u7EDF\u9ED8\u8BA4\u7F16\u8F91\u5668")).on("close", (code) => finish(code === 0, code === 0 ? void 0 : "VS Code \u6253\u5F00\u5931\u8D25"));
+        if (process.platform === "darwin") {
+          spawn2("open", ["-a", "Visual Studio Code", absPath], { stdio: "ignore" }).on("error", () => finish(false, "\u672A\u627E\u5230 VS Code\uFF0C\u5DF2\u5C1D\u8BD5\u7CFB\u7EDF\u9ED8\u8BA4\u7F16\u8F91\u5668")).on("close", (code) => finish(code === 0, code === 0 ? void 0 : "VS Code \u6253\u5F00\u5931\u8D25"));
+        } else {
+          spawn2("xdg-open", [absPath], { stdio: "ignore" }).on("error", () => finish(false, "\u672A\u627E\u5230\u53EF\u7528\u7684\u6253\u5F00\u65B9\u5F0F\uFF08xdg-open\uFF09")).on("close", (code) => finish(code === 0, code === 0 ? void 0 : "\u6253\u5F00\u5931\u8D25"));
+        }
       } catch {
         try {
           spawn2("open", [absPath], { stdio: "ignore" }).on("error", () => finish(false, "\u65E0\u6CD5\u6253\u5F00\u6587\u4EF6")).on("close", (code) => finish(code === 0, code === 0 ? void 0 : "\u6253\u5F00\u5931\u8D25"));
@@ -532,10 +548,12 @@ function readJsonBody(req) {
       }
     });
     req.on("error", () => resolve({}));
+    req.on("aborted", () => resolve({}));
+    req.on("close", () => resolve({}));
   });
 }
 function readWriteJsonBody(req) {
-  const CAP = MAX_TEXT_EDIT + 16 * 1024;
+  const CAP = MAX_TEXT_EDIT * 6 + 16 * 1024;
   return new Promise((resolve) => {
     let data = "";
     let tooBig = false;
@@ -555,6 +573,8 @@ function readWriteJsonBody(req) {
       }
     });
     req.on("error", () => resolve({}));
+    req.on("aborted", () => resolve({}));
+    req.on("close", () => resolve({}));
   });
 }
 
@@ -1173,7 +1193,9 @@ function registerRoutes(ctx) {
               res.end();
               return;
             }
-            createReadStream(validated.path, { start, end }).on("error", () => {
+            const rangeStream = createReadStream(validated.path, { start, end });
+            req.on("close", () => rangeStream.destroy());
+            rangeStream.on("error", () => {
               res.destroy();
             }).pipe(res);
             return;
@@ -1195,7 +1217,9 @@ function registerRoutes(ctx) {
           res.end();
           return;
         }
-        createReadStream(validated.path).on("error", () => {
+        const fullStream = createReadStream(validated.path);
+        req.on("close", () => fullStream.destroy());
+        fullStream.on("error", () => {
           res.destroy();
         }).pipe(res);
       }
@@ -1428,7 +1452,7 @@ function registerRoutes(ctx) {
       handler: mutation((body) => {
         const path = validatedRelPath(body);
         if (path.error !== void 0) return { error: path.error };
-        return { args: ["restore", "--staged", "--", path.path], fallback: "\u53D6\u6D88\u6682\u5B58\u5931\u8D25" };
+        return { direct: (cwd) => unstagePath(cwd, path.path) };
       })
     });
     const offStageAll = ctx.webServer.register({
@@ -2454,11 +2478,26 @@ var TaskboardLedger = class {
           }
         }
         if (error.code !== "EEXIST") throw error;
+        let raw;
+        try {
+          raw = readFileSync(this.lockFile, "utf8");
+        } catch (readError) {
+          if (readError.code === "ENOENT") continue;
+          throw readError;
+        }
+        if (raw.trim() === "") {
+          try {
+            unlinkSync(this.lockFile);
+          } catch (unlinkError) {
+            if (unlinkError.code !== "ENOENT") throw unlinkError;
+          }
+          continue;
+        }
         let pid;
         let ownerStartedAt;
         let ownerExact = false;
         try {
-          const owner = JSON.parse(readFileSync(this.lockFile, "utf8"));
+          const owner = JSON.parse(raw);
           if (typeof owner.pid === "number") pid = owner.pid;
           if (typeof owner.startedAt === "number") ownerStartedAt = owner.startedAt;
           ownerExact = owner.probe === "exact";
@@ -2977,6 +3016,7 @@ export {
   TERMINAL_RING_BYTES,
   TaskboardLedger,
   TaskboardRunner,
+  addIgnore,
   apply,
   applyArchiveTask,
   applyCreateTask,
@@ -2993,7 +3033,10 @@ export {
   createTask,
   defaultShell,
   extensionOf,
+  failureReason,
+  initRepo,
   inject,
+  inspect,
   isTaskPermission,
   isTaskStatus,
   isValidCron,
@@ -3004,9 +3047,14 @@ export {
   parseActionEnvelope,
   parseCron,
   parseLedger,
+  readJsonBody,
+  readWriteJsonBody,
+  removeIgnore,
+  runGit,
   scrubbedEnv,
   settleExecution,
   startExecution,
+  unstagePath,
   validatedWriteContent,
   withSchedule,
   withStatus,

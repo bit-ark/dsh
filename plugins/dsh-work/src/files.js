@@ -4,7 +4,7 @@
 import { readdirSync, statSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { open, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { open, realpath, rename, rm } from 'node:fs/promises'
 
 export function listDir(absPath) {
   let dirents
@@ -168,7 +168,16 @@ export async function writeFileAtomic(absPath, content) {
   try { target = await realpath(absPath) } catch { /* 保持原路径 */ }
   const tmpPath = `${target}.dwb-tmp-${process.pid}-${Date.now()}`
   try {
-    await writeFile(tmpPath, content, { encoding: 'utf8', mode: stat.mode & 0o777 })
+    // open → write → fsync → close → rename：与账本 #commit 同一 fsync 纪律。
+    // 仅 writeFile + rename 时，崩溃/掉电可能把未落盘的零字节/半截内容 rename
+    // 成目标文件；先 sync 再换名才是真原子。
+    const fh = await open(tmpPath, 'w', stat.mode & 0o777)
+    try {
+      await fh.writeFile(content, 'utf8')
+      await fh.sync()
+    } finally {
+      await fh.close()
+    }
     await rename(tmpPath, target)
   } catch (error) {
     try { await rm(tmpPath, { force: true }) } catch { /* 清理尽力而为 */ }
@@ -200,11 +209,21 @@ export function openInEditor(absPath) {
         finish(code === 0, code === 0 ? undefined : 'VS Code 打开失败')
       })
     }
+    // `code` CLI 缺失时的回退链（按平台）：
+    //  - darwin：`open -a "Visual Studio Code"` → 系统缺省 `open <path>`；
+    //  - 其他 POSIX：`xdg-open <path>`（旧实现对非 darwin 一律用 `open`，
+    //    Linux 上必然 ENOENT，永远报「打开失败」）。
     const fallback = () => {
       try {
-        spawn('open', ['-a', 'Visual Studio Code', absPath], { stdio: 'ignore' })
-          .on('error', () => finish(false, '未找到 VS Code，已尝试系统默认编辑器'))
-          .on('close', (code) => finish(code === 0, code === 0 ? undefined : 'VS Code 打开失败'))
+        if (process.platform === 'darwin') {
+          spawn('open', ['-a', 'Visual Studio Code', absPath], { stdio: 'ignore' })
+            .on('error', () => finish(false, '未找到 VS Code，已尝试系统默认编辑器'))
+            .on('close', (code) => finish(code === 0, code === 0 ? undefined : 'VS Code 打开失败'))
+        } else {
+          spawn('xdg-open', [absPath], { stdio: 'ignore' })
+            .on('error', () => finish(false, '未找到可用的打开方式（xdg-open）'))
+            .on('close', (code) => finish(code === 0, code === 0 ? undefined : '打开失败'))
+        }
       } catch {
         try {
           spawn('open', [absPath], { stdio: 'ignore' })

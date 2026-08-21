@@ -58,9 +58,8 @@ await build({
   // cwd 无关——从仓库根目录或插件目录构建都得到逐字节一致的 lib/。
   absWorkingDir: root,
   // 所有 @deepseek-ai/* 在运行时从 profile 模块链解析。
-  // playwright / playwright-core 含原生二进制与 cjs 动态 require，不打包进 bundle。
   // node-pty（原生 prebuilds）/ ws 同样运行时从插件自身 node_modules 解析。
-  external: ['@deepseek-ai/*', 'playwright', 'playwright-core', 'node-pty', 'ws'],
+  external: ['@deepseek-ai/*', 'node-pty', 'ws'],
   logLevel: 'info',
 })
 

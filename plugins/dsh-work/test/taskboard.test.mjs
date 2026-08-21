@@ -532,6 +532,20 @@ test('账本：半截不可读锁失败关闭并给出恢复提示', () => {
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('账本：零字节锁（open 与写入之间崩溃的残留）被自动接管', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-work-taskboard-'))
+  // 空文件 = 上一个进程刚 openSync('wx') 成功就崩溃，没进程持有它。
+  writeFileSync(join(dir, 'taskboard-ledger.lock'), '', 'utf8')
+  let ledger
+  try {
+    ledger = new TaskboardLedger(dir)
+    assert.equal(ledger.state().tasks.length, 0)
+  } finally {
+    ledger?.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ── 运行器 inspect 结算（S5）─────────────────────────────────────────────
 
 function mockApi({ items, events, hasMore = false }) {

@@ -4,7 +4,7 @@
 import { createReadStream, statSync } from 'node:fs'
 // ws 的 ESM 入口（wrapper.mjs）只暴露命名导出；WebSocketServer 不在默认导出上。
 import { WebSocketServer } from 'ws'
-import { failureReason, initRepo, addIgnore, removeIgnore, runGit, inspect } from './git.js'
+import { failureReason, initRepo, addIgnore, removeIgnore, runGit, inspect, unstagePath } from './git.js'
 import { contentTypeFor, filePreview, listDir, openInEditor, validatedWriteContent, writeFileAtomic } from './files.js'
 import { readJsonBody, readWriteJsonBody, validatedCwd, validatedFilePath, validatedFilePathValue, validatedMessage, validatedRelPath } from './validate.js'
 import { proxyBrowser } from './browser.js'
@@ -218,7 +218,12 @@ export function registerRoutes(ctx) {
               'cache-control': 'no-store',
             })
             if (req.method === 'HEAD') { res.end(); return }
-            createReadStream(validated.path, { start, end })
+            const rangeStream = createReadStream(validated.path, { start, end })
+            // 客户端中止（视频拖动换 range 很常见）：裸 pipe 不会连带销毁源流，
+            // 不回收会把剩余文件读完，泄漏 FD 与磁盘带宽。正常结束时 destroy
+            // 已完成的流是 no-op。
+            req.on('close', () => rangeStream.destroy())
+            rangeStream
               .on('error', () => { res.destroy() })
               .pipe(res)
             return
@@ -237,7 +242,10 @@ export function registerRoutes(ctx) {
           'cache-control': 'no-store',
         })
         if (req.method === 'HEAD') { res.end(); return }
-        createReadStream(validated.path)
+        const fullStream = createReadStream(validated.path)
+        // 同 206 分支：客户端中止时回收源读流。
+        req.on('close', () => fullStream.destroy())
+        fullStream
           .on('error', () => { res.destroy() })
           .pipe(res)
       },
@@ -463,7 +471,9 @@ export function registerRoutes(ctx) {
       handler: mutation((body) => {
         const path = validatedRelPath(body)
         if (path.error !== undefined) return { error: path.error }
-        return { args: ['restore', '--staged', '--', path.path], fallback: '取消暂存失败' }
+        // 无提交的新仓库没有 HEAD，`restore --staged` 会 fatal；
+        // unstagePath 内部回退 `rm --cached`（见 git.js）。
+        return { direct: (cwd) => unstagePath(cwd, path.path) }
       }),
     })
     const offStageAll = ctx.webServer.register({

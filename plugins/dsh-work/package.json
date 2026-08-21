@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-work",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Right-docked workbench panel with multi-instance tab system: file/dir tree, git operations, sandboxed browser with Eruda devtools, interactive multi-terminal (node-pty + xterm.js over WebSocket), and a task board (Host-authoritative ledger, real DSH session execution, Host cron scheduling), plus extensible feature registry. Features open as tabs from a grid home, multiple instances supported.",
   "type": "module",
   "main": "lib/index.js",
@@ -16,7 +16,7 @@
   "scripts": {
     "build": "node build.mjs",
     "prepublishOnly": "node build.mjs",
-    "test": "node build.mjs && node test/classify.test.mjs && node test/preview.test.mjs && node test/panel.test.mjs && node test/terminal.test.mjs && node test/taskboard.test.mjs"
+    "test": "node build.mjs && node test/classify.test.mjs && node test/preview.test.mjs && node test/panel.test.mjs && node test/terminal.test.mjs && node test/taskboard.test.mjs && node test/host.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -28,7 +28,6 @@
   },
   "dependencies": {
     "node-pty": "^1.2.0-beta.15",
-    "playwright": "^1.56.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {

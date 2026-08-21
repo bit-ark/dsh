@@ -22,7 +22,7 @@
  *   POST  /workbench/open                 → open in VS Code        (body: {path})
  *   POST  /workbench/git/init?cwd=…       → git init (bare, host default branch)
  *   POST  /workbench/git/stage?cwd=…      → git add -- <path>        (body: {path})
- *   POST  /workbench/git/unstage?cwd=…    → git restore --staged -- <path>  (body: {path})
+ *   POST  /workbench/git/unstage?cwd=…    → git restore --staged -- <path>（无 HEAD 的新仓库回退 git rm --cached）  (body: {path})
  *   POST  /workbench/git/stage-all?cwd=…  → git add -A
  *   POST  /workbench/git/commit?cwd=…     → git commit -m <message>  (body: {message})
  *   POST  /workbench/git/ignore?cwd=…     → append to .gitignore      (body: {path})
@@ -127,6 +127,10 @@ export {
   validatedWriteContent,
   writeFileAtomic,
 } from './files.js'
+// git 事实与操作 re-export：test/host.test.mjs 从入口导入断言（中文路径回归）。
+export { addIgnore, failureReason, initRepo, inspect, removeIgnore, runGit, unstagePath } from './git.js'
+// 请求体读取 re-export：test/host.test.mjs 用假 req 断言中止兜底与超限行为。
+export { readJsonBody, readWriteJsonBody } from './validate.js'
 // 终端纯逻辑 re-export：test/terminal.test.mjs 从入口导入断言。
 export {
   clampedTermSize,
