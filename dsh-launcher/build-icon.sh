@@ -17,7 +17,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # 1. 组装图标 SVG：白色圆角底 + 鱼 logo（原图 50x50 → 放大到 4096 画布，四周留白）
-FISH_PATH="$(grep -o '<path[^>]*/>' "$SRC_SVG" | head -1)"
+#    提取 favicon 的第一个 <path.../> 元素：优先用 perl 多行匹配（path 属性
+#    跨行也能提取），perl 不可用或无匹配时退回 grep 单行匹配。
+#    注意 `|| true`：pipefail 下无匹配时管道返回非 0，不加会让脚本静默退出。
+FISH_PATH=""
+if command -v perl >/dev/null 2>&1; then
+  FISH_PATH="$(perl -0777 -ne 'if (/<path\b[^>]*\/>/) { print $&; exit; }' "$SRC_SVG" 2>/dev/null || true)"
+fi
+if [ -z "$FISH_PATH" ]; then
+  FISH_PATH="$(grep -o '<path[^>]*/>' "$SRC_SVG" 2>/dev/null | head -1 || true)"
+fi
 if [ -z "$FISH_PATH" ]; then
   echo "错误: 未在 SVG 中找到 path 元素"
   exit 1

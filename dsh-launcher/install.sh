@@ -34,13 +34,14 @@ rm -rf "$DESKTOP/dsh.app" "$DESKTOP_LINK"
 #    无需自动化/辅助功能权限）
 mkdir -p "$STATE_DIR"
 rm -rf "$APP_DIR"
-TMP_AS="$(mktemp -t dsh-launcher).applescript"
+# 注意：mktemp 的产物直接作为源码文件使用（不再拼接后缀，避免残留裸临时文件）
+TMP_AS="$(mktemp -t dsh-launcher)"
+trap 'rm -f "$TMP_AS"' EXIT
 cat > "$TMP_AS" <<'EOF'
 set bundlePath to POSIX path of (path to me)
 do shell script "bash " & (quoted form of (bundlePath & "Contents/Resources/dispatch.sh"))
 EOF
 osacompile -o "$APP_DIR" "$TMP_AS"
-rm -f "$TMP_AS"
 
 # 2. 放入启动器主脚本与调度脚本
 cp "$SRC_DIR/start-dsh.sh" "$APP_DIR/Contents/Resources/start-dsh.sh"
@@ -64,13 +65,18 @@ PLIST="$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier 'com.local.dsh-launcher'" "$PLIST" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string 'com.local.dsh-launcher'" "$PLIST"
 
-# 5. 种子状态文件：仓库当前已构建过，避免首次启动重复构建
-if git -C "$REPO" rev-parse HEAD > "$STATE_DIR/last-built-commit" 2>/dev/null; then
-  echo "已记录当前构建版本: $(cut -c1-12 "$STATE_DIR/last-built-commit")"
+# 5. 种子状态文件：若仓库已有构建产物，记录当前提交为「已构建版本」，
+#    避免首次启动时触发一次多余的完整构建
+if [ -d "$REPO/apps/web/dist" ]; then
+  if git -C "$REPO" rev-parse HEAD > "$STATE_DIR/last-built-commit" 2>/dev/null; then
+    echo "已记录当前构建版本: $(cut -c1-12 "$STATE_DIR/last-built-commit")"
+  fi
 fi
 
 # 6. 重新签名（osacompile 的临时签名在修改 bundle 后失效）
-codesign --force --deep -s - "$APP_DIR" 2>/dev/null || true
+if ! codesign --force --deep -s - "$APP_DIR" 2>/dev/null; then
+  echo "⚠ codesign 签名失败：双击启动时可能被 Gatekeeper 拦截，请检查系统日志"
+fi
 
 # 7. 桌面放 Finder 替身（alias）。普通符号链接（ln -s）在 Finder 里常显示为
 #    通用空白图标；Finder 替身能正确显示 app 的鲸鱼 logo。替身仍指向非保护

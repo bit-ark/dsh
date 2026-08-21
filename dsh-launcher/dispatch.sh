@@ -33,16 +33,21 @@ mkdir -p "$STATE_DIR"
 # 探测：返回一个仍在运行、且仍挂在可见终端（tty != "??"）上的 launcher 进程 PID。
 # 不再用 pgrep -f（会误匹配命令行里含 "start-dsh.sh" 的无关进程，如 grep / vim /
 # agent 跑的命令、甚至含该字符串的 bash -c），而是直接读 launcher.lock/pid ——
-# start-dsh.sh 启动时把自己的 PID 写进锁文件（见 start-dsh.sh 第 121-133 行），
-# 精确无歧义。tty 为 "??" 说明该进程已脱离终端（窗口已关但进程残留），按不存在处理。
+# start-dsh.sh 启动时把自己的 PID 写进锁文件（见 start-dsh.sh 的互斥锁部分）。
+# 判定标准与 start-dsh.sh 的 is_attached_launcher 完全一致（进程存活 +
+# 命令行含 start-dsh.sh + tty 可见），避免两边标准不一致导致「新窗口一闪而过」；
+# 命令行匹配还能防止 PID 被系统复用给无关进程时误判。
 find_launcher() {
   local pid_file="$STATE_DIR/launcher.lock/pid"
-  local p tty
+  local p tty cmd
   [ -f "$pid_file" ] || return 1
   p="$(cat "$pid_file" 2>/dev/null | tr -d ' ')"
   [ -n "$p" ] || return 1
-  # 验活：进程已退出（或 PID 被回收）则视为无 launcher
+  # 验活：进程已退出则视为无 launcher
   kill -0 "$p" 2>/dev/null || return 1
+  # 验身份：PID 可能被系统复用给无关进程，命令行必须确实是 start-dsh.sh
+  cmd="$(ps -o command= -p "$p" 2>/dev/null || true)"
+  case "$cmd" in *"start-dsh.sh"*) : ;; *) return 1 ;; esac
   tty="$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ')"
   if [ -n "$tty" ] && [ "$tty" != "??" ]; then
     echo "$p"
