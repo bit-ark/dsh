@@ -59,27 +59,6 @@ function formatSkippedIds(ids, skipped) {
   const suffix = shown.length < skipped ? `\u2026\u7B49 ${skipped} \u4E2A` : "";
   return shown.map((id) => `\u300C${id}\u300D`).join("\u3001") + suffix;
 }
-function ArchiveIcon({ size }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-    "svg",
-    {
-      width: size,
-      height: size,
-      viewBox: "0 0 16 16",
-      fill: "none",
-      stroke: "currentColor",
-      strokeWidth: "1.2",
-      strokeLinecap: "round",
-      strokeLinejoin: "round",
-      "aria-hidden": true,
-      children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", { x: "1.5", y: "2", width: "13", height: "3.5", rx: "1" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M2.5 5.5v7a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-7" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M6 8.5h4" })
-      ]
-    }
-  );
-}
 var downloadStates = {};
 var downloadListeners = /* @__PURE__ */ new Set();
 var downloadInflight = /* @__PURE__ */ new Set();
@@ -150,14 +129,7 @@ function apply(ctx) {
     styleEl.id = STYLE_ID;
     styleEl.setAttribute("data-plugin", "dsh-archive");
     styleEl.textContent = `
-      .dsh-archive-badge {
-        background: transparent;
-      }
-      .dsh-archive-badge:hover,
-      .dsh-archive-badge[data-active] {
-        background: var(--dsw-alias-interactive-bg-hover);
-      }
-      .dsh-archive-close:hover {
+      .dsh-archive-row:hover {
         background: var(--dsw-alias-interactive-bg-hover);
       }
       .dsh-archive-batch:hover:not(:disabled) {
@@ -167,150 +139,46 @@ function apply(ctx) {
     document.head.appendChild(styleEl);
   }
   const styles = {
-    // 侧边栏 footer 把动作排成一行水平 flex（flex-direction: row, nowrap）。
-    // 条目是占满整行的 flex 项（可收缩，未来有兄弟动作时共享空间而非被挤出），
-    // 徽标几何与设置触发按钮一致——同为 34px 高、12px 圆角、14px/22px 字体，
-    // hover 高亮向外溢出 4px。rail 窄栏保持 36px 圆形。
-    layer: {
-      position: "relative",
-      flex: "1 1 auto",
-      minWidth: 0,
-      display: "flex",
-      alignItems: "center"
-    },
-    layerRail: {
-      flex: "none"
-    },
-    badge: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      width: "calc(100% + 8px)",
-      height: "34px",
-      margin: "4px -4px 4px",
-      padding: "6px 10px",
+    // 设置页根：与 dsh-balance 设置页同款——页面自己滚动，颜色走主题 token。
+    root: {
+      height: "100%",
+      overflowY: "auto",
+      padding: "16px 20px",
       boxSizing: "border-box",
-      border: "none",
-      borderRadius: "12px",
       color: "var(--dsw-alias-label-primary)",
-      fontFamily: "inherit",
-      fontSize: "14px",
-      lineHeight: "22px",
-      cursor: "pointer",
-      overflow: "hidden",
-      whiteSpace: "nowrap"
+      fontSize: "var(--dsw-font-xs-13, 13px)",
+      fontFamily: "var(--dsw-font-family, inherit)"
     },
-    badgeRail: {
-      justifyContent: "center",
-      gap: "0",
-      width: "36px",
-      height: "36px",
-      margin: "8px 0 10px",
-      padding: "0",
-      borderRadius: "50%"
-    },
-    badgeLabel: {
-      flex: "none",
-      minWidth: 0,
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap"
-    },
-    badgeCount: {
-      flex: "none",
-      marginLeft: "auto",
-      color: "var(--dsw-alias-label-tertiary)",
-      fontSize: "12px",
-      lineHeight: "16px",
-      fontVariantNumeric: "tabular-nums"
-    },
-    panel: {
-      position: "fixed",
-      left: "12px",
-      bottom: "128px",
-      zIndex: 30,
+    pageHeader: {
       display: "flex",
-      flexDirection: "column",
-      width: "420px",
-      maxWidth: "calc(100vw - 24px)",
-      maxHeight: "60vh",
-      overflow: "hidden",
-      border: "1px solid var(--dsw-alias-border-l1)",
-      borderRadius: "12px",
-      background: "var(--dsw-alias-bg-base)",
-      boxShadow: "var(--dsw-shadow-lv2)"
-    },
-    panelHeader: {
-      flex: "none",
-      display: "flex",
-      alignItems: "center",
+      alignItems: "baseline",
       gap: "8px",
-      minHeight: "44px",
-      padding: "0 12px",
-      boxSizing: "border-box",
-      borderBottom: "1px solid var(--dsw-alias-border-l2)"
+      marginBottom: "4px"
     },
-    panelTitle: {
-      fontSize: "13px",
-      fontWeight: 500,
-      lineHeight: "20px",
-      color: "var(--dsw-alias-label-primary)"
+    title: {
+      fontSize: "var(--dsw-font-xs-strong-13, 13px)",
+      fontWeight: 600
     },
-    panelProject: {
+    project: {
       minWidth: 0,
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
-      fontSize: "12px",
-      color: "var(--dsw-alias-label-tertiary)"
-    },
-    close: {
-      flex: "none",
-      marginLeft: "auto",
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      width: "24px",
-      height: "24px",
-      padding: 0,
-      border: "none",
-      borderRadius: "6px",
-      background: "transparent",
       color: "var(--dsw-alias-label-tertiary)",
-      fontSize: "14px",
-      cursor: "pointer"
+      fontSize: "var(--dsw-font-xxs-12, 12px)"
     },
-    batchDelete: {
+    count: {
+      marginLeft: "auto",
       flex: "none",
-      display: "inline-flex",
-      alignItems: "center",
-      height: "24px",
-      padding: "0 12px",
-      boxSizing: "border-box",
-      borderRadius: "6px",
-      border: "1px solid var(--dsw-alias-state-error-primary)",
-      background: "transparent",
-      color: "var(--dsw-alias-state-error-primary)",
-      fontSize: "12px",
-      lineHeight: "1",
-      cursor: "pointer"
+      color: "var(--dsw-alias-label-tertiary)",
+      fontSize: "var(--dsw-font-xxs-12, 12px)",
+      fontVariantNumeric: "tabular-nums"
     },
-    panelFooter: {
-      flex: "none",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "flex-end",
-      gap: "8px",
-      minHeight: "44px",
-      padding: "0 12px",
-      boxSizing: "border-box",
-      borderTop: "1px solid var(--dsw-alias-border-l2)"
-    },
-    panelBody: {
-      flex: 1,
-      minHeight: 0,
-      overflowY: "auto",
-      padding: "8px 12px 12px"
+    hint: {
+      color: "var(--dsw-alias-label-secondary)",
+      fontSize: "var(--dsw-font-xxs-12, 12px)",
+      lineHeight: 1.6,
+      marginBottom: "12px"
     },
     error: {
       padding: "8px 12px",
@@ -362,10 +230,33 @@ function apply(ctx) {
       textAlign: "center",
       color: "var(--dsw-alias-label-tertiary)",
       fontSize: "12px"
+    },
+    batchRow: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "flex-end",
+      gap: "8px",
+      marginTop: "8px",
+      paddingTop: "10px",
+      borderTop: "1px solid var(--dsw-alias-border-l2)"
+    },
+    batchDelete: {
+      flex: "none",
+      display: "inline-flex",
+      alignItems: "center",
+      height: "24px",
+      padding: "0 12px",
+      boxSizing: "border-box",
+      borderRadius: "6px",
+      border: "1px solid var(--dsw-alias-state-error-primary)",
+      background: "transparent",
+      color: "var(--dsw-alias-state-error-primary)",
+      fontSize: "12px",
+      lineHeight: "1",
+      cursor: "pointer"
     }
   };
-  function ArchiveFooterAction(props) {
-    const wide = props.wide !== false;
+  function ArchiveSection(_props) {
     const workspaces = (0, import_react.useSyncExternalStore)(
       ctx.workspaces.list.subscribe,
       () => ctx.workspaces.list.getSnapshot()
@@ -374,18 +265,11 @@ function apply(ctx) {
       ctx.sessions.list.subscribe,
       () => ctx.sessions.list.getSnapshot()
     );
-    const [open, setOpen] = (0, import_react.useState)(false);
     const [busy, setBusy] = (0, import_react.useState)(null);
     const [batchBusy, setBatchBusy] = (0, import_react.useState)(false);
     const [error, setError] = (0, import_react.useState)(null);
-    const panelRef = (0, import_react.useRef)(null);
-    const triggerRef = (0, import_react.useRef)(null);
     const busyRef = (0, import_react.useRef)(false);
     const batchBusyRef = (0, import_react.useRef)(false);
-    const closePanel = () => {
-      setError(null);
-      setOpen(false);
-    };
     const workspace = (0, import_react.useMemo)(() => {
       const items = workspaces?.items;
       if (items === void 0 || items.length === 0) return void 0;
@@ -427,29 +311,6 @@ function apply(ctx) {
     (0, import_react.useEffect)(() => {
       pruneDownloads(new Set(rows.map((row) => row.id)));
     }, [rows]);
-    (0, import_react.useEffect)(() => {
-      if (!open) return;
-      const onKey = (event) => {
-        if (event.key === "Escape") {
-          setError(null);
-          setOpen(false);
-        }
-      };
-      const onPointerDown = (event) => {
-        const target = event.target;
-        if (target === null) return;
-        if (panelRef.current?.contains(target) === true) return;
-        if (triggerRef.current?.contains(target) === true) return;
-        setError(null);
-        setOpen(false);
-      };
-      document.addEventListener("keydown", onKey);
-      document.addEventListener("mousedown", onPointerDown);
-      return () => {
-        document.removeEventListener("keydown", onKey);
-        document.removeEventListener("mousedown", onPointerDown);
-      };
-    }, [open]);
     const downloads = (0, import_react.useSyncExternalStore)(
       (listener) => subscribeDownloads(listener),
       () => getDownloadsSnapshot()
@@ -549,169 +410,123 @@ function apply(ctx) {
     const openSession = (id) => {
       try {
         ctx.sessions.open(id);
-        closePanel();
       } catch {
       }
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: wide ? styles.layer : { ...styles.layer, ...styles.layerRail }, children: [
-      open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-        "section",
-        {
-          ref: panelRef,
-          style: styles.panel,
-          "aria-label": "\u5DF2\u5F52\u6863\u4F1A\u8BDD",
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { style: styles.panelHeader, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.panelTitle, children: "\u5DF2\u5F52\u6863\u4F1A\u8BDD" }),
-              projectLabel !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: styles.panelProject, children: [
-                "\xB7 ",
-                projectLabel
-              ] }) : null,
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                "button",
-                {
-                  type: "button",
-                  className: "dsh-archive-close",
-                  style: styles.close,
-                  "aria-label": "\u5173\u95ED",
-                  onClick: () => {
-                    closePanel();
-                  },
-                  children: "\u2715"
-                }
-              )
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.panelBody, children: [
-              error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.error, children: error }) : null,
-              rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.empty, children: "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" }) : null,
-              rows.map((row) => {
-                const rowBusy = busy !== null && busy.id === row.id;
-                const anyBusy = busy !== null || batchBusy;
-                const time = formatTime(row.updatedAt);
-                const dlEntry = downloads?.bySession?.[row.id];
-                const downloading = dlEntry?.status === "downloading";
-                const dlError = dlEntry?.status === "error" ? dlEntry.error ?? "\u5BFC\u51FA\u5931\u8D25" : null;
-                return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.row, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.rowMain, children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                      "div",
-                      {
-                        style: styles.rowTitle,
-                        title: `\u6253\u5F00\u4F1A\u8BDD ${row.title}`,
-                        onClick: () => {
-                          openSession(row.id);
-                        },
-                        children: row.title
-                      }
-                    ),
-                    time !== "" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.rowMeta, children: time }) : null
-                  ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                    "button",
-                    {
-                      type: "button",
-                      title: dlError ?? "\u4E0B\u8F7D\u4F1A\u8BDD\u65E5\u5FD7 (ZIP)",
-                      disabled: anyBusy || downloading,
-                      style: {
-                        ...styles.buttonBase,
-                        border: "1px solid var(--dsw-alias-border-l2)",
-                        color: "var(--dsw-alias-label-primary)",
-                        opacity: anyBusy || downloading ? 0.5 : 1
-                      },
-                      onClick: () => {
-                        void downloadSessionLog(row.id);
-                      },
-                      children: downloading ? "\u4E0B\u8F7D\u4E2D\u2026" : dlError !== null ? "\u91CD\u8BD5" : "\u4E0B\u8F7D"
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                    "button",
-                    {
-                      type: "button",
-                      disabled: anyBusy,
-                      style: {
-                        ...styles.buttonBase,
-                        border: "1px solid var(--dsw-alias-border-l2)",
-                        color: "var(--dsw-alias-label-primary)",
-                        opacity: anyBusy && !rowBusy ? 0.5 : 1
-                      },
-                      onClick: () => {
-                        restore(row.id);
-                      },
-                      children: rowBusy && busy?.action === "restore" ? "\u6062\u590D\u4E2D\u2026" : "\u6062\u590D"
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                    "button",
-                    {
-                      type: "button",
-                      disabled: anyBusy,
-                      style: {
-                        ...styles.buttonBase,
-                        border: "1px solid var(--dsw-alias-state-error-primary)",
-                        color: "var(--dsw-alias-state-error-primary)",
-                        opacity: anyBusy && !rowBusy ? 0.5 : 1
-                      },
-                      onClick: () => {
-                        remove(row.id, row.title);
-                      },
-                      children: rowBusy && busy?.action === "delete" ? "\u5220\u9664\u4E2D\u2026" : "\u5220\u9664"
-                    }
-                  )
-                ] }, row.id);
-              })
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", { style: styles.panelFooter, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.root, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.pageHeader, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.title, children: "\u5DF2\u5F52\u6863\u4F1A\u8BDD" }),
+        projectLabel !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: styles.project, children: [
+          "\xB7 ",
+          projectLabel
+        ] }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.count, children: rows.length })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.hint, children: "\u7BA1\u7406\u5F53\u524D\u9879\u76EE\u7684\u5DF2\u5F52\u6863\u4F1A\u8BDD\u3002\u6062\u590D\u4F1A\u628A\u5B83\u653E\u56DE\u4FA7\u8FB9\u680F\u5217\u8868\uFF1B\u5220\u9664\u4E3A\u786C\u5220\u9664\uFF08\u4E0D\u53EF\u6062\u590D\uFF09\uFF1B \u8FD0\u884C\u4E2D\u7684\u4F1A\u8BDD\u65E0\u6CD5\u5220\u9664\uFF0C\u9700\u91CD\u542F dsh web \u540E\u91CD\u8BD5\u3002" }),
+      error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.error, children: error }) : null,
+      rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.empty, children: "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5DF2\u5F52\u6863\u7684\u4F1A\u8BDD" }) : null,
+      rows.map((row) => {
+        const rowBusy = busy !== null && busy.id === row.id;
+        const anyBusy = busy !== null || batchBusy;
+        const time = formatTime(row.updatedAt);
+        const dlEntry = downloads?.bySession?.[row.id];
+        const downloading = dlEntry?.status === "downloading";
+        const dlError = dlEntry?.status === "error" ? dlEntry.error ?? "\u5BFC\u51FA\u5931\u8D25" : null;
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.row, className: "dsh-archive-row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: styles.rowMain, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "div",
               {
-                type: "button",
-                className: "dsh-archive-batch",
-                style: {
-                  ...styles.batchDelete,
-                  opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1
-                },
-                disabled: batchBusy || busy !== null || rows.length === 0,
+                style: styles.rowTitle,
+                title: `\u6253\u5F00\u4F1A\u8BDD ${row.title}`,
                 onClick: () => {
-                  deleteAll();
+                  openSession(row.id);
                 },
-                children: batchBusy ? "\u5220\u9664\u4E2D\u2026" : "\u4E00\u952E\u5220\u9664"
+                children: row.title
               }
-            ) })
-          ]
-        }
-      ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+            ),
+            time !== "" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.rowMeta, children: time }) : null
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              title: dlError ?? "\u4E0B\u8F7D\u4F1A\u8BDD\u65E5\u5FD7 (ZIP)",
+              disabled: anyBusy || downloading,
+              style: {
+                ...styles.buttonBase,
+                border: "1px solid var(--dsw-alias-border-l2)",
+                color: "var(--dsw-alias-label-primary)",
+                opacity: anyBusy || downloading ? 0.5 : 1
+              },
+              onClick: () => {
+                void downloadSessionLog(row.id);
+              },
+              children: downloading ? "\u4E0B\u8F7D\u4E2D\u2026" : dlError !== null ? "\u91CD\u8BD5" : "\u4E0B\u8F7D"
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              disabled: anyBusy,
+              style: {
+                ...styles.buttonBase,
+                border: "1px solid var(--dsw-alias-border-l2)",
+                color: "var(--dsw-alias-label-primary)",
+                opacity: anyBusy && !rowBusy ? 0.5 : 1
+              },
+              onClick: () => {
+                restore(row.id);
+              },
+              children: rowBusy && busy?.action === "restore" ? "\u6062\u590D\u4E2D\u2026" : "\u6062\u590D"
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              disabled: anyBusy,
+              style: {
+                ...styles.buttonBase,
+                border: "1px solid var(--dsw-alias-state-error-primary)",
+                color: "var(--dsw-alias-state-error-primary)",
+                opacity: anyBusy && !rowBusy ? 0.5 : 1
+              },
+              onClick: () => {
+                remove(row.id, row.title);
+              },
+              children: rowBusy && busy?.action === "delete" ? "\u5220\u9664\u4E2D\u2026" : "\u5220\u9664"
+            }
+          )
+        ] }, row.id);
+      }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: styles.batchRow, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
         "button",
         {
-          ref: triggerRef,
           type: "button",
-          className: "dsh-archive-badge",
-          style: wide ? styles.badge : { ...styles.badge, ...styles.badgeRail },
-          "data-active": open || void 0,
-          "aria-label": `\u5DF2\u5F52\u6863\u4F1A\u8BDD\uFF08${String(rows.length)}\uFF09`,
-          "aria-expanded": open,
-          title: wide ? void 0 : `\u5DF2\u5F52\u6863\u4F1A\u8BDD\uFF08${String(rows.length)}\uFF09`,
-          onClick: () => {
-            if (open) closePanel();
-            else setOpen(true);
+          className: "dsh-archive-batch",
+          style: {
+            ...styles.batchDelete,
+            opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1
           },
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArchiveIcon, { size: wide ? 16 : 18 }),
-            wide && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.badgeLabel, children: "\u5F52\u6863" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: styles.badgeCount, children: rows.length })
-            ] })
-          ]
+          disabled: batchBusy || busy !== null || rows.length === 0,
+          onClick: () => {
+            deleteAll();
+          },
+          children: batchBusy ? "\u5220\u9664\u4E2D\u2026" : "\u4E00\u952E\u5220\u9664"
         }
-      )
+      ) })
     ] });
   }
-  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register(
+  ctx.slots.inject("settings.section", () => ctx.slots.register(
     {
-      name: "sidebar.footer.action",
-      id: "archive-panel"
+      name: "settings.section",
+      id: "dsh-archive",
+      order: 30,
+      label: () => "\u5F52\u6863"
     },
-    ArchiveFooterAction
+    ArchiveSection
   ));
 }
 

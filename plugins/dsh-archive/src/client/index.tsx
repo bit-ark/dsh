@@ -1,35 +1,34 @@
 /**
  * dsh-archive — 客户端半（Browser）。
  *
- * 在侧边栏 footer 动作列表注册一个条目：归档动作。footer 动作常驻显示
- * （宽栏 = 文字 + 计数，rail 窄栏 = 纯图标；项目无归档时计数为 0）。点击
- * 后在 footer 上方打开浮动面板，只列出「当前项目」的已归档会话——归档会话
- * 属于当前项目当且仅当：它在当前 workspace 的账目中，或其存储的 cwd 等于
- * 项目路径。每行提供三个动词：
+ * 在设置面板注册一个「归档」页（`settings.section` 官方插槽的 list 条目 =
+ * 设置左侧导航菜单项 + 整页内容区；设置页打开时渲染该 section，切换到其他
+ * section 时卸载，回到「归档」时是干净的新页面）。页面只列出「当前项目」的
+ * 已归档会话——归档会话属于当前项目当且仅当：它在当前 workspace 的账目中，
+ * 或其存储的 cwd 等于项目路径。每行提供三个动词：
  *
- *  - 下载：对接 harness 核心端点的自包含导出（/api/session.export，与
- *    session-log-download 插件无关；后者不在本部署的 bundle 列表里，其头部
- *    按钮位被 notifier 铃铛占据）。每个会话的导出状态存在本插件自己的 store
- *    里（模块级 downloadStates），行 UI 空闲渲染也不丢状态。
+ *  - 下载：对接 harness 核心端点的自包含导出（/api/session.export）。每个
+ *    会话的导出状态存在本插件自己的 store 里（模块级 downloadStates），
+ *    行 UI 空闲渲染也不丢状态。
  *  - 恢复：POST /dsh-archive/restore——宿主把会话移出归档集合；随后广播
- *    的 host/archived-sessions-changed 帧会让侧边栏与面板自动刷新。
+ *    的 host/archived-sessions-changed 帧会让侧边栏与页面自动刷新。
  *  - 删除：确认后 POST /dsh-archive/delete——宿主硬删除（持久化工件 +
  *    workspace 账目 + 归档集合）；成功后本页主动刷新 sessions 与 workspaces
  *    列表，让侧边栏立即消失、不残留幽灵条目。
- *  - 一键删除：面板底部 footer 区域的按钮，确认后 POST
- *    /dsh-archive/delete-all——把当前项目全部已归档会话一次性批量硬删除
- *    （宿主侧跳过运行中的会话），成功后同样刷新两个列表；总是显示完整结果
- *    提示（已删除 / 跳过运行中 / 失败明细，含被跳过的会话 id）。提示随面板
- *    生命周期走：关闭面板（✕ / Escape / 外点）即清除，重开面板是干净的。
+ *  - 一键删除：页面底部按钮，确认后 POST /dsh-archive/delete-all——把当前
+ *    项目全部已归档会话一次性批量硬删除（宿主侧跳过运行中的会话），成功后
+ *    同样刷新两个列表；总是显示完整结果提示（已删除 / 跳过运行中 / 失败
+ *    明细，含被跳过的会话 id）。结果提示随页面生命周期走：切换设置 section
+ *    或关闭设置面板后清除，再进「归档」页是干净的。
  *
  * 「当前项目」不依赖任何打开的会话即可解析：最近活跃的 workspace → 持有
  * 当前会话的 workspace 账目 → 当前会话 cwd 对应的 workspace。行数据全部来自
  * 运行时既有 store（ctx.workspaces.list 提供归档集合，ctx.sessions.list 提供
  * 标题）；只有两个变更操作需要本插件自己的宿主路由。
  *
- * 放置理由：归档是侧边栏动作（workspace 浏览器右键「归档会话」），恢复后
- * 也回到同一列表——管理界面放在生命周期起点与终点所在的侧边栏，而不是放在
- * session 作用域的会话 tab 行里。
+ * 放置理由：归档是项目级管理（workspace 浏览器右键「归档会话」），恢复后也
+ * 回到同一列表；管理界面放在设置面板的独立页面，避免在 session 作用域的会话
+ * tab 行里出现项目级操作，也让侧边栏 footer 腾给「DeepSeek 账户」小部件。
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
@@ -61,7 +60,7 @@ interface SessionListSnapshot {
   current?: string
 }
 
-/** 面板里的一行归档会话。 */
+/** 页面里的一行归档会话。 */
 interface ArchiveRow {
   id: string
   title: string
@@ -107,30 +106,9 @@ function formatSkippedIds(ids: readonly string[], skipped: number): string {
   return shown.map(id => `「${id}」`).join('、') + suffix
 }
 
-/** 内联归档箱图标（不引入图标包依赖，保持插件自包含）。 */
-function ArchiveIcon({ size }: { size: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="1.5" y="2" width="13" height="3.5" rx="1" />
-      <path d="M2.5 5.5v7a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-7" />
-      <path d="M6 8.5h4" />
-    </svg>
-  )
-}
-
 /**
  * 每个会话的日志导出状态（本插件私有 store，行 UI 空闲渲染也保留）。
- * 模块级而非组件级：面板关闭再打开、行重渲染时下载状态不丢。
+ * 模块级而非组件级：页面关闭再打开、行重渲染时下载状态不丢。
  */
 type DownloadStatus = 'downloading' | 'success' | 'error'
 interface DownloadEntry { status: DownloadStatus; error?: string }
@@ -217,7 +195,7 @@ async function downloadSessionLog(sessionId: string): Promise<void> {
 
 /**
  * 清理已不存在会话的下载状态：行消失（会话被删 / 移出项目）后，残留的
- * success/error 条目会在会话 id 将来复用时错误地重新出现；面板关闭时统一
+ * success/error 条目会在会话 id 将来复用时错误地重新出现；页面关闭时统一
  * 修剪一次（模块级 store 长驻，只靠新增覆盖会无限膨胀）。
  */
 function pruneDownloads(activeIds: ReadonlySet<string>): void {
@@ -232,7 +210,7 @@ function pruneDownloads(activeIds: ReadonlySet<string>): void {
 }
 
 export function apply(ctx: any): void {
-  // 一张带标记的样式表，补上内联样式表达不了的 hover / active 态。
+  // 一张带标记的样式表，补上内联样式表达不了的 hover 态。
   // 与 dsh-update 同样的约定（id + data-plugin）；守卫防止重复挂载重复插标签。
   const STYLE_ID = 'dsh-archive-style'
   if (typeof document !== 'undefined' && document.getElementById(STYLE_ID) === null) {
@@ -240,14 +218,7 @@ export function apply(ctx: any): void {
     styleEl.id = STYLE_ID
     styleEl.setAttribute('data-plugin', 'dsh-archive')
     styleEl.textContent = `
-      .dsh-archive-badge {
-        background: transparent;
-      }
-      .dsh-archive-badge:hover,
-      .dsh-archive-badge[data-active] {
-        background: var(--dsw-alias-interactive-bg-hover);
-      }
-      .dsh-archive-close:hover {
+      .dsh-archive-row:hover {
         background: var(--dsw-alias-interactive-bg-hover);
       }
       .dsh-archive-batch:hover:not(:disabled) {
@@ -258,150 +229,46 @@ export function apply(ctx: any): void {
   }
 
   const styles = {
-    // 侧边栏 footer 把动作排成一行水平 flex（flex-direction: row, nowrap）。
-    // 条目是占满整行的 flex 项（可收缩，未来有兄弟动作时共享空间而非被挤出），
-    // 徽标几何与设置触发按钮一致——同为 34px 高、12px 圆角、14px/22px 字体，
-    // hover 高亮向外溢出 4px。rail 窄栏保持 36px 圆形。
-    layer: {
-      position: 'relative',
-      flex: '1 1 auto',
-      minWidth: 0,
-      display: 'flex',
-      alignItems: 'center',
-    },
-    layerRail: {
-      flex: 'none',
-    },
-    badge: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      width: 'calc(100% + 8px)',
-      height: '34px',
-      margin: '4px -4px 4px',
-      padding: '6px 10px',
+    // 设置页根：与 dsh-balance 设置页同款——页面自己滚动，颜色走主题 token。
+    root: {
+      height: '100%',
+      overflowY: 'auto',
+      padding: '16px 20px',
       boxSizing: 'border-box',
-      border: 'none',
-      borderRadius: '12px',
       color: 'var(--dsw-alias-label-primary)',
-      fontFamily: 'inherit',
-      fontSize: '14px',
-      lineHeight: '22px',
-      cursor: 'pointer',
-      overflow: 'hidden',
-      whiteSpace: 'nowrap',
+      fontSize: 'var(--dsw-font-xs-13, 13px)',
+      fontFamily: 'var(--dsw-font-family, inherit)',
     },
-    badgeRail: {
-      justifyContent: 'center',
-      gap: '0',
-      width: '36px',
-      height: '36px',
-      margin: '8px 0 10px',
-      padding: '0',
-      borderRadius: '50%',
+    pageHeader: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: '8px',
+      marginBottom: '4px',
     },
-    badgeLabel: {
-      flex: 'none',
+    title: {
+      fontSize: 'var(--dsw-font-xs-strong-13, 13px)',
+      fontWeight: 600,
+    },
+    project: {
       minWidth: 0,
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-    },
-    badgeCount: {
-      flex: 'none',
-      marginLeft: 'auto',
       color: 'var(--dsw-alias-label-tertiary)',
-      fontSize: '12px',
-      lineHeight: '16px',
+      fontSize: 'var(--dsw-font-xxs-12, 12px)',
+    },
+    count: {
+      marginLeft: 'auto',
+      flex: 'none',
+      color: 'var(--dsw-alias-label-tertiary)',
+      fontSize: 'var(--dsw-font-xxs-12, 12px)',
       fontVariantNumeric: 'tabular-nums',
     },
-    panel: {
-      position: 'fixed',
-      left: '12px',
-      bottom: '128px',
-      zIndex: 30,
-      display: 'flex',
-      flexDirection: 'column',
-      width: '420px',
-      maxWidth: 'calc(100vw - 24px)',
-      maxHeight: '60vh',
-      overflow: 'hidden',
-      border: '1px solid var(--dsw-alias-border-l1)',
-      borderRadius: '12px',
-      background: 'var(--dsw-alias-bg-base)',
-      boxShadow: 'var(--dsw-shadow-lv2)',
-    },
-    panelHeader: {
-      flex: 'none',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      minHeight: '44px',
-      padding: '0 12px',
-      boxSizing: 'border-box',
-      borderBottom: '1px solid var(--dsw-alias-border-l2)',
-    },
-    panelTitle: {
-      fontSize: '13px',
-      fontWeight: 500,
-      lineHeight: '20px',
-      color: 'var(--dsw-alias-label-primary)',
-    },
-    panelProject: {
-      minWidth: 0,
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
-      fontSize: '12px',
-      color: 'var(--dsw-alias-label-tertiary)',
-    },
-    close: {
-      flex: 'none',
-      marginLeft: 'auto',
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: '24px',
-      height: '24px',
-      padding: 0,
-      border: 'none',
-      borderRadius: '6px',
-      background: 'transparent',
-      color: 'var(--dsw-alias-label-tertiary)',
-      fontSize: '14px',
-      cursor: 'pointer',
-    },
-    batchDelete: {
-      flex: 'none',
-      display: 'inline-flex',
-      alignItems: 'center',
-      height: '24px',
-      padding: '0 12px',
-      boxSizing: 'border-box',
-      borderRadius: '6px',
-      border: '1px solid var(--dsw-alias-state-error-primary)',
-      background: 'transparent',
-      color: 'var(--dsw-alias-state-error-primary)',
-      fontSize: '12px',
-      lineHeight: '1',
-      cursor: 'pointer',
-    },
-    panelFooter: {
-      flex: 'none',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      gap: '8px',
-      minHeight: '44px',
-      padding: '0 12px',
-      boxSizing: 'border-box',
-      borderTop: '1px solid var(--dsw-alias-border-l2)',
-    },
-    panelBody: {
-      flex: 1,
-      minHeight: 0,
-      overflowY: 'auto',
-      padding: '8px 12px 12px',
+    hint: {
+      color: 'var(--dsw-alias-label-secondary)',
+      fontSize: 'var(--dsw-font-xxs-12, 12px)',
+      lineHeight: 1.6,
+      marginBottom: '12px',
     },
     error: {
       padding: '8px 12px',
@@ -454,11 +321,34 @@ export function apply(ctx: any): void {
       color: 'var(--dsw-alias-label-tertiary)',
       fontSize: '12px',
     },
+    batchRow: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: '8px',
+      marginTop: '8px',
+      paddingTop: '10px',
+      borderTop: '1px solid var(--dsw-alias-border-l2)',
+    },
+    batchDelete: {
+      flex: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+      height: '24px',
+      padding: '0 12px',
+      boxSizing: 'border-box',
+      borderRadius: '6px',
+      border: '1px solid var(--dsw-alias-state-error-primary)',
+      background: 'transparent',
+      color: 'var(--dsw-alias-state-error-primary)',
+      fontSize: '12px',
+      lineHeight: '1',
+      cursor: 'pointer',
+    },
   } as const
 
-  /** 侧边栏 footer 的归档动作：徽标 + 浮动面板。 */
-  function ArchiveFooterAction(props: { wide?: boolean }): any {
-    const wide = props.wide !== false
+  /** 设置面板的「归档」页（settings.section 插槽，id: dsh-archive）。 */
+  function ArchiveSection(_props: { close?: () => void }): any {
     // 订阅运行时 store：workspaces（归档集合 / 项目解析）、sessions（标题）。
     const workspaces = useSyncExternalStore(
       ctx.workspaces.list.subscribe as (listener: () => void) => () => void,
@@ -468,22 +358,14 @@ export function apply(ctx: any): void {
       ctx.sessions.list.subscribe as (listener: () => void) => () => void,
       () => ctx.sessions.list.getSnapshot() as SessionListSnapshot,
     )
-    const [open, setOpen] = useState(false)
     const [busy, setBusy] = useState<{ id: string; action: 'restore' | 'delete' } | null>(null)
     const [batchBusy, setBatchBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const panelRef = useRef<HTMLDivElement | null>(null)
-    const triggerRef = useRef<HTMLButtonElement | null>(null)
     // 同步在途守卫：setBusy 要等下一次渲染才禁用按钮，同一 tick 里的第二次
     // 点击会重新进入 run/deleteAll（React 18 批处理）——用 ref 在进入时
     // 立即拦截，杜绝双击双发（批量删除会双计数、下载会双发 HEAD+GET）。
     const busyRef = useRef(false)
     const batchBusyRef = useRef(false)
-    /** 关闭面板并清空提示：提示随面板生命周期走，重开面板是干净的。 */
-    const closePanel = (): void => {
-      setError(null)
-      setOpen(false)
-    }
 
     // 不依赖打开会话解析当前项目：最近活跃 workspace → 持有当前会话的
     // workspace → 当前会话 cwd 对应的 workspace。
@@ -535,33 +417,6 @@ export function apply(ctx: any): void {
       pruneDownloads(new Set(rows.map(row => row.id)))
     }, [rows])
 
-    // Escape 关闭；点击面板与触发按钮之外的区域关闭。
-    // （触发按钮被排除在外，让点击事件自己负责开关——否则 mousedown 关闭后
-    // 紧接的 click 切换会立刻重新打开。关闭时清空提示，与 ✕ 关闭行为一致。）
-    useEffect(() => {
-      if (!open) return
-      const onKey = (event: KeyboardEvent): void => {
-        if (event.key === 'Escape') {
-          setError(null)
-          setOpen(false)
-        }
-      }
-      const onPointerDown = (event: MouseEvent): void => {
-        const target = event.target as Node | null
-        if (target === null) return
-        if (panelRef.current?.contains(target) === true) return
-        if (triggerRef.current?.contains(target) === true) return
-        setError(null)
-        setOpen(false)
-      }
-      document.addEventListener('keydown', onKey)
-      document.addEventListener('mousedown', onPointerDown)
-      return () => {
-        document.removeEventListener('keydown', onKey)
-        document.removeEventListener('mousedown', onPointerDown)
-      }
-    }, [open])
-
     // 每个会话的实时导出状态（私有 store），行按钮据此显示「下载中…」并禁用，
     // 出错时变成「重试」。
     const downloads = useSyncExternalStore(
@@ -569,7 +424,7 @@ export function apply(ctx: any): void {
       () => getDownloadsSnapshot(),
     )
 
-    /** 执行恢复 / 删除；失败把可读错误写入面板提示区（覆盖旧提示）。 */
+    /** 执行恢复 / 删除；失败把可读错误写入页面提示区（覆盖旧提示）。 */
     const run = async (action: 'restore' | 'delete', id: string): Promise<void> => {
       if (busyRef.current) return
       busyRef.current = true
@@ -679,152 +534,120 @@ export function apply(ctx: any): void {
         }
       })()
     }
-    /** 打开会话（从面板切到会话区）；失败通常是因为列表刷新中行已消失。 */
+    /** 打开会话（从设置页切到会话区）；失败通常是因为列表刷新中行已消失。 */
     const openSession = (id: string): void => {
       try {
         ctx.sessions.open(id)
-        closePanel()
       } catch {
         // 行在列表刷新时消失的竞态：下一次渲染自然清掉。
       }
     }
 
     return (
-      <div style={wide ? styles.layer : { ...styles.layer, ...styles.layerRail }}>
-        {open && (
-          <section
-            ref={panelRef}
-            style={styles.panel}
-            aria-label="已归档会话"
-          >
-            <header style={styles.panelHeader}>
-              <span style={styles.panelTitle}>已归档会话</span>
-              {projectLabel !== undefined
-                ? <span style={styles.panelProject}>· {projectLabel}</span>
-                : null}
+      <div style={styles.root}>
+        <div style={styles.pageHeader}>
+          <span style={styles.title}>已归档会话</span>
+          {projectLabel !== undefined
+            ? <span style={styles.project}>· {projectLabel}</span>
+            : null}
+          <span style={styles.count}>{rows.length}</span>
+        </div>
+        <div style={styles.hint}>
+          管理当前项目的已归档会话。恢复会把它放回侧边栏列表；删除为硬删除（不可恢复）；
+          运行中的会话无法删除，需重启 dsh web 后重试。
+        </div>
+        {error !== null ? <div style={styles.error}>{error}</div> : null}
+        {rows.length === 0
+          ? <div style={styles.empty}>当前项目没有已归档的会话</div>
+          : null}
+        {rows.map(row => {
+          const rowBusy = busy !== null && busy.id === row.id
+          const anyBusy = busy !== null || batchBusy
+          const time = formatTime(row.updatedAt)
+          const dlEntry = downloads?.bySession?.[row.id]
+          const downloading = dlEntry?.status === 'downloading'
+          const dlError = dlEntry?.status === 'error' ? (dlEntry.error ?? '导出失败') : null
+          return (
+            <div key={row.id} style={styles.row} className="dsh-archive-row">
+              <div style={styles.rowMain}>
+                <div
+                  style={styles.rowTitle}
+                  title={`打开会话 ${row.title}`}
+                  onClick={() => { openSession(row.id) }}
+                >
+                  {row.title}
+                </div>
+                {time !== '' ? <div style={styles.rowMeta}>{time}</div> : null}
+              </div>
               <button
                 type="button"
-                className="dsh-archive-close"
-                style={styles.close}
-                aria-label="关闭"
-                onClick={() => { closePanel() }}
-              >
-                ✕
-              </button>
-            </header>
-            <div style={styles.panelBody}>
-              {error !== null ? <div style={styles.error}>{error}</div> : null}
-              {rows.length === 0
-                ? <div style={styles.empty}>当前项目没有已归档的会话</div>
-                : null}
-              {rows.map(row => {
-                const rowBusy = busy !== null && busy.id === row.id
-                const anyBusy = busy !== null || batchBusy
-                const time = formatTime(row.updatedAt)
-                const dlEntry = downloads?.bySession?.[row.id]
-                const downloading = dlEntry?.status === 'downloading'
-                const dlError = dlEntry?.status === 'error' ? (dlEntry.error ?? '导出失败') : null
-                return (
-                  <div key={row.id} style={styles.row}>
-                    <div style={styles.rowMain}>
-                      <div
-                        style={styles.rowTitle}
-                        title={`打开会话 ${row.title}`}
-                        onClick={() => { openSession(row.id) }}
-                      >
-                        {row.title}
-                      </div>
-                      {time !== '' ? <div style={styles.rowMeta}>{time}</div> : null}
-                    </div>
-                    <button
-                      type="button"
-                      title={dlError ?? '下载会话日志 (ZIP)'}
-                      disabled={anyBusy || downloading}
-                      style={{
-                        ...styles.buttonBase,
-                        border: '1px solid var(--dsw-alias-border-l2)',
-                        color: 'var(--dsw-alias-label-primary)',
-                        opacity: anyBusy || downloading ? 0.5 : 1,
-                      }}
-                      onClick={() => { void downloadSessionLog(row.id) }}
-                    >
-                      {downloading ? '下载中…' : dlError !== null ? '重试' : '下载'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={anyBusy}
-                      style={{
-                        ...styles.buttonBase,
-                        border: '1px solid var(--dsw-alias-border-l2)',
-                        color: 'var(--dsw-alias-label-primary)',
-                        opacity: anyBusy && !rowBusy ? 0.5 : 1,
-                      }}
-                      onClick={() => { restore(row.id) }}
-                    >
-                      {rowBusy && busy?.action === 'restore' ? '恢复中…' : '恢复'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={anyBusy}
-                      style={{
-                        ...styles.buttonBase,
-                        border: '1px solid var(--dsw-alias-state-error-primary)',
-                        color: 'var(--dsw-alias-state-error-primary)',
-                        opacity: anyBusy && !rowBusy ? 0.5 : 1,
-                      }}
-                      onClick={() => { remove(row.id, row.title) }}
-                    >
-                      {rowBusy && busy?.action === 'delete' ? '删除中…' : '删除'}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-            <footer style={styles.panelFooter}>
-              <button
-                type="button"
-                className="dsh-archive-batch"
+                title={dlError ?? '下载会话日志 (ZIP)'}
+                disabled={anyBusy || downloading}
                 style={{
-                  ...styles.batchDelete,
-                  opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1,
+                  ...styles.buttonBase,
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  color: 'var(--dsw-alias-label-primary)',
+                  opacity: anyBusy || downloading ? 0.5 : 1,
                 }}
-                disabled={batchBusy || busy !== null || rows.length === 0}
-                onClick={() => { deleteAll() }}
+                onClick={() => { void downloadSessionLog(row.id) }}
               >
-                {batchBusy ? '删除中…' : '一键删除'}
+                {downloading ? '下载中…' : dlError !== null ? '重试' : '下载'}
               </button>
-            </footer>
-          </section>
-        )}
-        <button
-          ref={triggerRef}
-          type="button"
-          className="dsh-archive-badge"
-          style={wide ? styles.badge : { ...styles.badge, ...styles.badgeRail }}
-          data-active={open || undefined}
-          aria-label={`已归档会话（${String(rows.length)}）`}
-          aria-expanded={open}
-          title={wide ? undefined : `已归档会话（${String(rows.length)}）`}
-          onClick={() => { if (open) closePanel(); else setOpen(true) }}
-        >
-          <ArchiveIcon size={wide ? 16 : 18} />
-          {wide && (
-            <>
-              <span style={styles.badgeLabel}>归档</span>
-              <span style={styles.badgeCount}>{rows.length}</span>
-            </>
-          )}
-        </button>
+              <button
+                type="button"
+                disabled={anyBusy}
+                style={{
+                  ...styles.buttonBase,
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  color: 'var(--dsw-alias-label-primary)',
+                  opacity: anyBusy && !rowBusy ? 0.5 : 1,
+                }}
+                onClick={() => { restore(row.id) }}
+              >
+                {rowBusy && busy?.action === 'restore' ? '恢复中…' : '恢复'}
+              </button>
+              <button
+                type="button"
+                disabled={anyBusy}
+                style={{
+                  ...styles.buttonBase,
+                  border: '1px solid var(--dsw-alias-state-error-primary)',
+                  color: 'var(--dsw-alias-state-error-primary)',
+                  opacity: anyBusy && !rowBusy ? 0.5 : 1,
+                }}
+                onClick={() => { remove(row.id, row.title) }}
+              >
+                {rowBusy && busy?.action === 'delete' ? '删除中…' : '删除'}
+              </button>
+            </div>
+          )
+        })}
+        <div style={styles.batchRow}>
+          <button
+            type="button"
+            className="dsh-archive-batch"
+            style={{
+              ...styles.batchDelete,
+              opacity: batchBusy || busy !== null || rows.length === 0 ? 0.5 : 1,
+            }}
+            disabled={batchBusy || busy !== null || rows.length === 0}
+            onClick={() => { deleteAll() }}
+          >
+            {batchBusy ? '删除中…' : '一键删除'}
+          </button>
+        </div>
       </div>
     )
   }
 
-  // 注册到侧边栏 footer 动作列表（id: archive-panel）。
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
+  // 注册到设置面板 section 列表（id 与插件名保持一致：dsh-archive）。
+  ctx.slots.inject('settings.section', () => ctx.slots.register(
     {
-      name: 'sidebar.footer.action',
-      id: 'archive-panel',
+      name: 'settings.section',
+      id: 'dsh-archive',
+      order: 30,
+      label: () => '归档',
     },
-    ArchiveFooterAction,
+    ArchiveSection,
   ))
 }
