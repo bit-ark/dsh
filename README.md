@@ -6,13 +6,13 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 
 | 插件（目录 / npm 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
 |---|---|---|---|---|
-| `@bit-ark/dsh-archive` | 0.1.1 | 侧边栏「归档」：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | sidebar.footer.action（归档面板） |
-| `@bit-ark/dsh-balance` | 0.1.0 | 设置「DeepSeek 账户」：余额 + 按天 Token 消耗图 + Top 会话 | GET /dsh-balance/balance \| /usage（只读） | settings.section（DeepSeek 账户页） |
+| `@bit-ark/dsh-archive` | 0.2.0 | 设置「归档」页：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | settings.section（归档页） |
+| `@bit-ark/dsh-balance` | 0.4.3 | 侧边栏「DeepSeek 账户」小部件：进度条对比今日总余额与今日消费（官方平台账单，需配置 userToken），消费部分按当前峰谷时段配色 | GET /dsh-balance/balance \| /usage \| /online（只读） | sidebar.footer.action（账户小部件） |
 | `@bit-ark/dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
 | `@bit-ark/dsh-notify` | 0.1.1 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
 | `@bit-ark/dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
 | `@bit-ark/dsh-update` | 0.1.0 | 版本与更新检查（只读）：设置页徽标 + 新版本 toast 提醒 | GET /updater/status \| POST /updater/recheck | settings.general.item（版本与更新行） |
-| `@bit-ark/dsh-work` | 1.2.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ 源码编辑与保存 + Git 提交图与基本操作 | GET /workbench/dir \| /file \| /asset \| /git，POST /workbench/write \| /open \| /workbench/git/* | shell.overlay（右停靠面板，id: workbench） |
+| `@bit-ark/dsh-work` | 1.4.0 | 右侧「工作面板」：目录树 + 点击文件预览（文本/图片/音视频）+ 源码编辑与保存 + Git 提交图与基本操作 + 沙箱浏览器 + 多终端 + **任务看板**（多列看板 + 真实 DSH 会话执行 + Host cron 定时） | GET /workbench/dir \| /file \| /asset \| /git \| /taskboard/state \| /taskboard/options，POST /workbench/write \| /open \| /workbench/git/* \| /workbench/taskboard/action | shell.overlay（右停靠面板，id: workbench） |
 
 ## 目录结构
 
@@ -27,7 +27,7 @@ dsh-plugins/
     ├── dsh-notify/          # 纯 JavaScript
     ├── dsh-restart/         # 纯 JavaScript
     ├── dsh-update/          # 纯 JavaScript
-    └── dsh-work/            # JavaScript（src/ 构建，产物在 lib/），含测试
+    └── dsh-work/            # JavaScript（src/ 构建，产物在 lib/），含测试；任务看板为 Apache-2.0 移植代码（见其 NOTICE）
 ```
 
 每个插件是独立的 npm 包，彼此互不依赖，各自目录下带有自己的 README。
@@ -87,3 +87,5 @@ npm publish                            # 每个插件一次（scoped 公共包�
 ## 许可证
 
 [MIT](LICENSE) © 2025 bitark
+
+> dsh-work 的任务看板功能移植自 [dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui) 的 `packages/dsh-task-board`（Apache-2.0），署名与修改清单见 `plugins/dsh-work/NOTICE`；该部分文件按 Apache-2.0 授权，其余为 MIT。
