@@ -84,8 +84,12 @@ export interface ModelPrice {
 /** 模型 id → 单价表（深度解构模型 + 其他 provider）。 */
 export type PriceTable = Record<string, ModelPrice>
 
-/** 高峰时段（北京时间小时，0..23）；DeepSeek V4 官方为每日 09:00–14:00。 */
-export const DEFAULT_PEAK_HOURS = [9, 10, 11, 12, 13] as const
+/**
+ * 高峰时段（北京时间小时，0..23）。DeepSeek V4 官方（2026-08-17 生效）：每日
+ * 北京时间 09:00–12:00 与 14:00–18:00 为高峰（正常价），其余时间为空闲/低谷
+ * （价格约为高峰的一半）。峰谷按北京时间计时、对全球所有地区统一适用。
+ */
+export const DEFAULT_PEAK_HOURS = [9, 10, 11, 14, 15, 16, 17] as const
 
 /** 北京时区（UTC+8，中国无夏令时）。 */
 const BEIJING_OFFSET_MS = 8 * 3_600_000
@@ -132,6 +136,43 @@ export function sumCost(
     priced += 1
   }
   return priced === 0 ? undefined : total
+}
+
+/** 今日消费按峰谷拆分（元）：peak = 高峰时段消费，offPeak = 低谷时段消费。 */
+export interface TodayCostSplit {
+  peak: number
+  offPeak: number
+  total: number
+  /** 今日是否有可计价样本（模型配了价格）。 */
+  priced: boolean
+}
+
+/**
+ * 把「今天（本地日历日）」的样本的估算费用按高峰/低谷拆分，供侧边栏小部件
+ * 把今日消费画成两段不同颜色。口径与 buildDayBuckets 完全一致：非今日样本
+ * 丢弃；高峰时段的样本按 ×2 计（costOfSample 内部）；模型无价格配置的样本
+ * 不计入（priced 保持 false，消费金额为 0 而非未知）。
+ */
+export function splitTodayCost(
+  samples: readonly UsageSample[],
+  nowMs: number,
+  prices?: PriceTable,
+  peakHours: readonly number[] = DEFAULT_PEAK_HOURS,
+): TodayCostSplit {
+  const today = localDate(nowMs)
+  const result: TodayCostSplit = { peak: 0, offPeak: 0, total: 0, priced: false }
+  for (const sample of samples) {
+    if (sample.time <= 0) continue
+    const { year, month, day } = localDate(sample.time)
+    if (year !== today.year || month !== today.month || day !== today.day) continue
+    const cost = costOfSample(sample, prices, peakHours)
+    if (cost === undefined) continue
+    result.priced = true
+    if (peakHours.includes(beijingHour(sample.time))) result.peak += cost
+    else result.offPeak += cost
+  }
+  result.total = result.peak + result.offPeak
+  return result
 }
 
 /** 持久化会话 header 的最小结构视图（不引入 harness 依赖）。 */

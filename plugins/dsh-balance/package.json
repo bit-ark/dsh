@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-balance",
-  "version": "0.1.0",
+  "version": "0.4.5",
   "description": "Adds a 设置 (Settings) section showing the DeepSeek account balance (official /user/balance API) and a per-day token-consumption bar chart aggregated from local persisted session logs.",
   "type": "module",
   "main": "lib/index.js",
@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/usage-fold.test.mjs"
+    "test": "node test/usage-fold.test.mjs && node test/platform.test.mjs"
   },
   "dsh": {
     "bundle": {

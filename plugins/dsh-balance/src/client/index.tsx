@@ -1,21 +1,32 @@
 /**
  * dsh-balance — 客户端半（Browser）。
  *
- * 在 `settings.section` 列表插槽注册一个条目（官方可追加位 = 设置左侧导航菜单
- * 项 + 整页内容区；General/Models/Plugins 用的也是这个插槽）。页面含三块：
+ * 在侧边栏 footer 动作列表注册一个「DeepSeek 账户」小部件（`sidebar.footer.action`
+ * 官方插槽的 list 条目，id: dsh-balance；footer 动作常驻显示，宽栏 = 完整宽度
+ * 标注条，rail 窄栏 = 居中小条）。宽栏布局为「上标注 + 下进度条」：
  *
- *  - 余额卡：GET /dsh-balance/balance —— 各币种总额 / 赠送 / 充值、
- *    可用性徽标、刷新。业务失败以 `ok:false` + code（'missing-key' |
- *    'auth-failed' | 'upstream' | 'network'）返回，渲染友好指引而非异常。
- *  - 消耗图：GET /dsh-balance/usage —— provider 上报的每日 token
- *    用量堆叠柱状图（未缓存输入 / 缓存读 / 缓存写 / 输出），附窗口合计、
- *    历史总计与绕过宿主缓存的「重新统计」。
- *  - Top API Key：按历史总计消耗最多的 5 个 API key（凭据引用名 + provider +
- *    模型细分 + token 数）。
+ *  - 进度条 = 今日总余额（余额接口的当前总额），其中的「消费段」= 今日消费金额
+ *    （**官方平台账单**，/dsh-balance/online）占总余额的比例；剩余为中性底色。
+ *  - 消费段颜色标识当前时段：低谷时段 = 成功绿（--dsw-alias-state-success-primary），
+ *    高峰时段 = 警示琥珀（--dsw-alias-state-warn-primary）。官方 usage 接口只按
+ *    「缓存命中/未命中/输出」归类的每日合计，**不提供高峰/低谷拆分**，因此消费段
+ *    为当前时段单色。每分钟 tick 一次，峰谷边界到点自动变色。
+ *  - 余额与消费数值**直接标注在图上**（不再用 title）：消费值居左、正对其色段
+ *    上方，余额值居右；消费文本色 = 时段色与 label-primary 的 color-mix（两种
+ *    主题下自动保证对比度），余额文本色 = label-primary，均 12px/500/tabular-nums。
+ *  - 正常态不挂 title（时段区分由颜色承担）；仅「加载中 / 出错 / 未配置」等非
+ *    时段信息保留 title 承载诊断与修复指引。
  *
- * 数据全部来自本插件自己的宿主路由，不读其他 store。图表是纯 CSS 实现
- * （冻结的浏览器模块表里没有第三方图表库可用），颜色用主题 token，深浅色自动
- * 适配。
+ * 数据来自本插件宿主路由 GET /dsh-balance/balance（官方余额）与
+ * GET /dsh-balance/online（平台私有用量接口的今日消费，需配置 userToken）。
+ * 拉取时机：挂载、window focus（10s 节流）与每 5 分钟兜底刷新。
+ *
+ * 今日消费不可用（未配置 / 失效的 userToken、网络异常）时：消费标注显示「—」、
+ * 进度条只剩余额中性底色，title 给出具体原因与修复指引——余额数字本身始终是
+ * 官方准确的。
+ *
+ * 原「设置 → DeepSeek 账户」整页（余额卡 + Token 消耗图 + Top API Key）随
+ * 迁移移除；宿主 /usage 端点保留（只读 API，供其他消费方使用），页面不再引用。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -32,74 +43,25 @@ type BalancePayload =
   | { ok: true; available: boolean; balances: BalanceEntry[]; fetchedAt: string }
   | { ok: false; code: string; message: string }
 
-interface DayRow {
-  date: string
-  label: string
-  uncachedInput: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
-  requests: number
-  /** 该日估算费用（元）；无价格配置时为 0。 */
-  cost: number
-}
-interface TopSessionRow {
-  sessionId: string
-  cwdLabel: string
-  total: number
-}
-/** 费用形状：null = 未配置价格（不计费），0 = 有价格但无费用。 */
-type CostWire = number | null
-/** 一个 API key（凭据引用）的全量消耗。 */
-interface TopKeyRow {
-  keyName: string
-  /** 消耗归属到该 key 的 provider 路由（如 deepseek-official）。 */
-  providerIds: string[]
-  /** 该 key 下各模型的消耗细分（model ≠ provider：模型如 deepseek-v4-flash）。 */
-  models: Array<{ model: string; total: number; requests: number; cost: CostWire }>
-  total: number
-  requests: number
-  cost: CostWire
-}
-type UsagePayload =
-  | {
-      ok: true
-      days: DayRow[]
-      totals: { uncachedInput: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: CostWire }
-      allTimeTotal: number
-      allTimeRequests: number
-      allTimeCost: CostWire
-      costCurrency: string
-      topSessions: TopSessionRow[]
-      topKeys: TopKeyRow[]
-      sessionsScanned: number
-      skipped: number
-      windowDays: number
-      generatedAt: string
-      cached: boolean
-    }
+/** /dsh-balance/online：官方平台账单的今日消费。 */
+type OnlinePayload =
+  | { ok: true; todayCost: number; currency: string; fetchedAt: string; cached?: boolean }
   | { ok: false; code: string; message: string }
 
-const CHART_HEIGHT = 150
-
 /**
- * 官方充值页：直达扫码支付落地页。DeepSeek 没有公开的充值下单 API
- * （私有订单端点只认浏览器登录态，API key 无法鉴权），一键直达官方页是
- * 唯一稳定路径。
+ * 高峰时段（北京时间小时，0..23）——与宿主 usage-fold DEFAULT_PEAK_HOURS 一致：
+ * DeepSeek V4 官方每日北京时间 09:00–12:00、14:00–18:00 为高峰（正常价），
+ * 其余时间为低谷（价格约为高峰一半）。峰谷按北京时间计时，全球统一适用，
+ * 与使用者所在地区无关。
  */
-const TOP_UP_URL = 'https://platform.deepseek.com/top_up'
+const PEAK_HOURS = new Set([9, 10, 11, 14, 15, 16, 17])
 
 /** 焦点刷新节流：从充值页切回时刷新一次，普通焦点抖动保持安静。 */
 const FOCUS_REFRESH_MIN_GAP_MS = 10_000
-
-/** 堆叠柱的四个分桶：字段名 → 中文标签 + 主题色。 */
-const SEGMENTS = [
-  { field: 'uncachedInput' as const, label: '未缓存输入', color: 'var(--dsw-alias-brand-primary)' },
-  { field: 'cacheRead' as const, label: '缓存读', color: 'var(--dsw-alias-state-warn-primary)' },
-  { field: 'cacheWrite' as const, label: '缓存写', color: 'var(--dsw-alias-label-tertiary)' },
-  { field: 'output' as const, label: '输出', color: 'var(--dsw-alias-state-success-primary)' },
-]
+/** 兜底刷新间隔：余额/消费变化慢，5 分钟一次足够。 */
+const REFRESH_STALE_MS = 300_000
+/** 每分钟 tick：峰谷边界（09:00 / 14:00 北京）到点自动重算。 */
+const TICK_MS = 60_000
 
 /** 拉取 JSON；网络错误 / 非 2xx / 空响应统一抛可读错误。 */
 async function fetchJson(path: string): Promise<any> {
@@ -121,23 +83,6 @@ async function fetchJson(path: string): Promise<any> {
   return payload
 }
 
-/** token 数格式化（千分位，非法值显示 0）。 */
-function formatTokens(value: number): string {
-  if (!Number.isFinite(value)) return '0'
-  return Math.round(value).toLocaleString('en-US')
-}
-
-/** ISO 时间戳 → 本地可读时间（非法输入返回空串）。 */
-function formatTime(iso: string): string {
-  const ms = Date.parse(iso)
-  if (Number.isNaN(ms)) return ''
-  try {
-    return new Date(ms).toLocaleString()
-  } catch {
-    return ''
-  }
-}
-
 /** 币种符号（已知币种给符号，未知给「币种 + 空格」）。 */
 function currencySymbol(currency: string): string {
   if (currency === 'CNY') return '¥'
@@ -145,526 +90,310 @@ function currencySymbol(currency: string): string {
   return `${currency} `
 }
 
-/** 费用格式化：null（未配置价格）→「—」；否则符号 + 两位小数。 */
-function formatCost(value: CostWire, currency: string): string {
-  if (value === null || value === undefined) return '—'
-  return `${currencySymbol(currency)}${Number.isFinite(value) ? value.toFixed(2) : '0.00'}`
+/** 金额格式化：符号 + 两位小数。 */
+function formatMoney(currency: string, value: number): string {
+  if (!Number.isFinite(value)) value = 0
+  return `${currencySymbol(currency)}${value.toFixed(2)}`
+}
+
+/**
+ * 取北京时区的小时（0..23）。Intl 不可用时回退本地时区（仅影响峰谷判定，
+ * 不影响余额数据）。'hour12: false' 在午夜可能给出 '24'，归一化为 0。
+ */
+function beijingHour(date: Date): number {
+  let hour = Number.NaN
+  try {
+    hour = Number.parseInt(new Intl.DateTimeFormat('en-US', {
+      hour: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Shanghai',
+    }).format(date), 10)
+  } catch {
+    hour = date.getHours()
+  }
+  if (Number.isNaN(hour)) return -1
+  return hour % 24
 }
 
 const styles = {
-  root: {
-    height: '100%',
-    overflowY: 'auto',
-    padding: '16px 20px',
-    boxSizing: 'border-box',
-    color: 'var(--dsw-alias-label-primary)',
-    fontSize: 'var(--dsw-font-xs-13, 13px)',
-    fontFamily: 'var(--dsw-font-family, inherit)',
+  // footer 把动作排成一行水平 flex（flex-direction: row, nowrap）。宽栏条目
+  // 是占满整行的 flex 项；条的高度与设置触发按钮一致（34px、12px 圆角），
+  // 内部进度条留 5px 内边距。rail 窄栏保持 36px 方形，居中放一条小进度条。
+  layer: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
   },
-  pageHeader: {
+  layerRail: {
+    flex: 'none',
+  },
+  strip: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    width: '100%',
+    margin: '4px 0 4px',
+    padding: '5px 8px',
+    boxSizing: 'border-box',
+    borderRadius: '12px',
+  },
+  labelsRow: {
     display: 'flex',
     alignItems: 'baseline',
-    gap: '8px',
-    marginBottom: '4px',
-  },
-  title: {
-    fontSize: 'var(--dsw-font-xs-strong-13, 13px)',
-    fontWeight: 600,
-  },
-  hint: {
-    color: 'var(--dsw-alias-label-secondary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    marginBottom: '12px',
-  },
-  card: {
-    padding: '12px 14px',
-    marginBottom: '12px',
-    borderRadius: '8px',
-    border: '1px solid var(--dsw-alias-border-l2)',
-    background: 'var(--dsw-alias-bg-layer-1)',
-  },
-  cardHeader: {
-    display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: '8px',
-    marginBottom: '10px',
+    lineHeight: 1,
   },
-  cardTitle: {
-    fontWeight: 600,
-    fontSize: 'var(--dsw-font-xs-13, 13px)',
-  },
-  cardTag: {
-    color: 'var(--dsw-alias-label-tertiary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    fontWeight: 400,
-    marginLeft: '6px',
-  },
-  button: {
-    flex: 'none',
-    padding: '3px 10px',
-    borderRadius: '6px',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    cursor: 'pointer',
-    background: 'transparent',
-    border: '1px solid var(--dsw-alias-border-l2)',
-    color: 'var(--dsw-alias-label-primary)',
-  },
-  topupButton: {
-    flex: 'none',
-    padding: '3px 10px',
-    borderRadius: '6px',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    cursor: 'pointer',
-    background: 'transparent',
-    border: '1px solid var(--dsw-alias-brand-primary)',
-    color: 'var(--dsw-alias-brand-primary)',
-  },
-  buttonRow: {
-    display: 'flex',
-    gap: '6px',
-  },
-  error: {
-    padding: '8px 12px',
-    borderRadius: '6px',
-    border: '1px solid var(--dsw-alias-state-error-primary)',
-    color: 'var(--dsw-alias-state-error-primary)',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-  },
-  notice: {
-    padding: '8px 12px',
-    borderRadius: '6px',
-    border: '1px solid var(--dsw-alias-border-l2)',
-    color: 'var(--dsw-alias-label-secondary)',
-    whiteSpace: 'pre-wrap',
-  },
-  loading: {
-    color: 'var(--dsw-alias-label-tertiary)',
-    padding: '6px 0',
-  },
-  bigFigure: {
-    fontSize: '22px',
-    fontWeight: 650,
-    lineHeight: 1.2,
-  },
-  subFigure: {
-    color: 'var(--dsw-alias-label-secondary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    marginTop: '2px',
-  },
-  badge: (ok: boolean): Record<string, string> => ({
-    display: 'inline-block',
-    marginTop: '8px',
-    padding: '2px 8px',
-    borderRadius: '10px',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    color: ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)',
-    border: `1px solid ${ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)'}`,
-  }),
-  tiny: {
-    color: 'var(--dsw-alias-label-tertiary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    marginTop: '8px',
-  },
-  legend: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '12px',
-    marginTop: '10px',
-    color: 'var(--dsw-alias-label-secondary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-  },
-  legendSwatch: (color: string): Record<string, string | number> => ({
-    display: 'inline-block',
-    width: '10px',
-    height: '10px',
-    borderRadius: '2px',
-    background: color,
-    marginRight: '4px',
-  }),
-  dayLabel: {
-    textAlign: 'center',
-    color: 'var(--dsw-alias-label-tertiary)',
-    fontSize: '10px',
-    marginTop: '4px',
+  label: {
+    fontSize: '12px',
+    fontWeight: 500,
+    lineHeight: '15px',
+    fontVariantNumeric: 'tabular-nums',
+    fontFamily: 'var(--dsw-font-family, inherit)',
     whiteSpace: 'nowrap',
+  },
+  bar: {
+    display: 'flex',
+    height: '8px',
+    borderRadius: '4px',
     overflow: 'hidden',
   },
-  totalsRow: {
-    marginTop: '10px',
-    color: 'var(--dsw-alias-label-secondary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    lineHeight: 1.6,
+  segment: {
+    height: '100%',
   },
-  sessionRow: {
+  railBox: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '6px 0',
-    borderBottom: '1px solid var(--dsw-alias-border-l1)',
+    justifyContent: 'center',
+    width: '36px',
+    height: '36px',
+    margin: '8px 0 10px',
   },
-  sessionName: {
-    flex: 1,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  sessionId: {
-    color: 'var(--dsw-alias-label-tertiary)',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-  },
-  modelRow: {
+  railTrack: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '2px 0',
-    fontSize: 'var(--dsw-font-xxs-12, 12px)',
-    color: 'var(--dsw-alias-label-secondary)',
-  },
-  modelName: {
-    flex: 1,
-    minWidth: 0,
+    width: '26px',
+    height: '5px',
+    borderRadius: '3px',
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
   },
-  empty: {
-    padding: '16px 0',
-    textAlign: 'center',
-    color: 'var(--dsw-alias-label-tertiary)',
+  railFill: {
+    height: '100%',
   },
 } as const
 
 /**
- * 堆叠柱状图：每根柱高按当日总量比例映射到 CHART_HEIGHT，柱内四个分桶按各自
- * 占比堆叠；柱顶 title 展示完整明细；日期标签按天数稀疏显示。
+ * 侧边栏 footer 的 DeepSeek 账户小部件：进度条（今日官方消费 vs 今日总余额，
+ * 消费段按当前时段配色），数值直接标注在图上（无 title），时段区分由颜色承担。
  */
-function UsageChart({ days, currency }: { days: DayRow[]; currency: string }): any {
-  const max = Math.max(...days.map(day => day.total), 1)
-  const labelEvery = days.length > 16 ? 3 : days.length > 9 ? 2 : 1
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: '4px', alignItems: 'stretch' }}>
-        {days.map((day, index) => {
-          const barPx = day.total > 0 ? Math.max(3, (day.total / max) * CHART_HEIGHT) : 0
-          const segmentPx = (value: number): number =>
-            day.total > 0 && value > 0 ? (value / day.total) * barPx : 0
-          const tooltip = `${day.date}\n`
-            + `未缓存输入 ${formatTokens(day.uncachedInput)} · 缓存读 ${formatTokens(day.cacheRead)}`
-            + ` · 缓存写 ${formatTokens(day.cacheWrite)} · 输出 ${formatTokens(day.output)}\n`
-            + `共 ${formatTokens(day.total)} tokens · ${String(day.requests)} 次请求\n`
-            + `估算费用 ${formatCost(day.cost > 0 ? day.cost : null, currency)}`
-          const showLabel = index % labelEvery === 0 || index === days.length - 1
-          return (
-            <div key={day.date} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-              <div
-                title={tooltip}
-                style={{
-                  height: `${String(CHART_HEIGHT)}px`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'flex-end',
-                  borderBottom: '1px solid var(--dsw-alias-border-l1)',
-                }}
-              >
-                {barPx > 0
-                  ? (
-                      <div style={{ borderRadius: '3px 3px 0 0', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                        {SEGMENTS.map(segment => (
-                          <div
-                            key={segment.field}
-                            style={{ height: `${String(segmentPx(day[segment.field]))}px`, background: segment.color }}
-                          />
-                        ))}
-                      </div>
-                    )
-                  : null}
-              </div>
-              <div style={{ ...styles.dayLabel, visibility: showLabel ? 'visible' : 'hidden' } as any}>
-                {day.label}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div style={styles.legend}>
-        {SEGMENTS.map(segment => (
-          <span key={segment.field}>
-            <span style={styles.legendSwatch(segment.color)} />
-            {segment.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function BalanceSection(_props: { close?: () => void }): any {
+function BalanceFooterAction(props: { wide?: boolean }): any {
+  const wide = props.wide !== false
   const [balance, setBalance] = useState<BalancePayload | null>(null)
   const [balanceError, setBalanceError] = useState<string | null>(null)
-  const [balanceLoading, setBalanceLoading] = useState(true)
-  const [usage, setUsage] = useState<UsagePayload | null>(null)
-  const [usageError, setUsageError] = useState<string | null>(null)
-  const [usageLoading, setUsageLoading] = useState(true)
-  const lastBalanceFetchAt = useRef(0)
-  // 卸载保护：设置页关闭时忽略在途请求的过期 setState（避免写已卸载组件）。
+  const [online, setOnline] = useState<OnlinePayload | null>(null)
+  const [onlineError, setOnlineError] = useState<string | null>(null)
+  // 每分钟自增触发重渲染，让峰谷配色在 09:00 / 14:00 北京到点自动切换。
+  const [, setTick] = useState(0)
+  const [hovered, setHovered] = useState(false)
+  const lastFetchAt = useRef(0)
+  // 卸载保护：组件卸载时忽略在途请求的过期 setState（避免写已卸载组件）。
   // 注意 effect 体必须先把 aliveRef 置回 true——React StrictMode 会
-  // 挂载→清理→再挂载，若不重置，重挂载后所有在途结果都被丢弃、页面
-  // 永远停在「正在获取…」。
+  // 挂载→清理→再挂载，若不重置，重挂载后所有在途结果都被丢弃。
   const aliveRef = useRef(true)
   useEffect(() => {
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
 
-  const loadBalance = useCallback(async (): Promise<void> => {
-    setBalanceLoading(true)
-    setBalanceError(null)
+  const load = useCallback(async (): Promise<void> => {
+    // 余额与官方消费相互独立：一个失败不拖垮另一个（余额失败仍有消费占比
+    // 可看，消费失败仍显示余额与中性条）。
     try {
-      const payload = await fetchJson('/dsh-balance/balance') as BalancePayload
-      if (aliveRef.current) setBalance(payload)
-    } catch (error) {
+      const result = await fetchJson('/dsh-balance/balance') as BalancePayload
+      if (aliveRef.current) {
+        setBalance(result)
+        setBalanceError(null)
+      }
+    } catch (err) {
       if (!aliveRef.current) return
       setBalance(null)
-      setBalanceError(error instanceof Error ? error.message : String(error))
-    } finally {
-      lastBalanceFetchAt.current = Date.now()
-      if (aliveRef.current) setBalanceLoading(false)
+      setBalanceError(err instanceof Error ? err.message : String(err))
     }
+    try {
+      const result = await fetchJson('/dsh-balance/online') as OnlinePayload
+      if (aliveRef.current) {
+        setOnline(result)
+        setOnlineError(null)
+      }
+    } catch (err) {
+      if (!aliveRef.current) return
+      setOnline(null)
+      setOnlineError(err instanceof Error ? err.message : String(err))
+    }
+    lastFetchAt.current = Date.now()
   }, [])
 
-  /** 一键跳转官方充值页（DeepSeek 无面向 API key 的充值接口，直达是唯一稳定路径）。 */
-  const openTopUp = useCallback((): void => {
-    window.open(TOP_UP_URL, '_blank', 'noopener')
-  }, [])
-
-  // 从官方充值页切回时应显示最新余额：window focus 触发，带节流
-  // （普通焦点抖动不触发请求）。
   useEffect(() => {
+    void load()
+    // 从官方充值页切回时应显示最新余额：window focus 触发，带节流。
     const onFocus = (): void => {
-      if (Date.now() - lastBalanceFetchAt.current < FOCUS_REFRESH_MIN_GAP_MS) return
-      void loadBalance()
+      if (Date.now() - lastFetchAt.current < FOCUS_REFRESH_MIN_GAP_MS) return
+      void load()
     }
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [loadBalance])
-
-  const loadUsage = useCallback(async (refresh: boolean): Promise<void> => {
-    setUsageLoading(true)
-    setUsageError(null)
-    try {
-      const path = refresh ? '/dsh-balance/usage?refresh=1' : '/dsh-balance/usage'
-      const payload = await fetchJson(path) as UsagePayload
-      if (aliveRef.current) setUsage(payload)
-    } catch (error) {
-      if (!aliveRef.current) return
-      setUsage(null)
-      setUsageError(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (aliveRef.current) setUsageLoading(false)
+    // 每分钟 tick：峰谷边界到点自动重算；余额/消费超过 5 分钟未刷新则兜底刷新。
+    const timer = window.setInterval(() => {
+      setTick(value => value + 1)
+      if (Date.now() - lastFetchAt.current >= REFRESH_STALE_MS) void load()
+    }, TICK_MS)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [load])
 
-  useEffect(() => {
-    void loadBalance()
-    void loadUsage(false)
-  }, [loadBalance, loadUsage])
+  // 当前时段：高峰 → 琥珀（警示「贵」），低谷 → 绿（「便宜，可用」）。
+  const peakNow = PEAK_HOURS.has(beijingHour(new Date()))
 
-  const children: any[] = []
+  // ── 状态推导：图上标注文本 + 进度条占比 + 配色 ────────────────────────
+  // 正常态不挂 title：时段区分由颜色承担，余额/消费数值默认隐藏、悬停时显示。
+  // 仅「加载中 / 出错 / 未配置」等非时段信息保留 title 承载诊断与指引。
+  let tooltip: string | undefined
+  let trackColor = 'color-mix(in srgb, var(--dsw-alias-label-tertiary) 25%, transparent)'
+  let stripBackground = 'color-mix(in srgb, var(--dsw-alias-label-tertiary) 10%, transparent)'
+  let stripBorder = '1px solid color-mix(in srgb, var(--dsw-alias-label-tertiary) 18%, transparent)'
+  let segments: Array<{ pct: number; color: string }> = []
+  let costValue = '—'
+  let costAria = '今日消费 —'
+  let costColor = 'var(--dsw-alias-label-tertiary)'
+  let balanceValue = '—'
+  let balanceAria = '余额 —'
+  let balanceColor = 'var(--dsw-alias-label-primary)'
 
-  children.push(
-    <div key="page-header" style={styles.pageHeader}>
-      <span style={styles.title}>DeepSeek 账户</span>
-    </div>,
-    <div key="page-hint" style={styles.hint}>
-      余额来自 DeepSeek 官方接口；消耗统计自本机持久化会话日志（provider 上报的实际 token 用量）。充值直达官方扫码页，返回本页后余额自动刷新。
-    </div>,
-  )
+  // 消费段与消费文本的时段色相：高峰 → 琥珀，低谷 → 绿。
+  const PEAK_COLOR = 'var(--dsw-alias-state-warn-primary)'
+  const OFF_PEAK_COLOR = 'var(--dsw-alias-state-success-primary)'
+  const periodHue = peakNow ? PEAK_COLOR : OFF_PEAK_COLOR
+  // 消费文本色 = 时段色与 label-primary 的混合：浅色主题自动偏深、深色主题
+  // 自动偏亮（label-primary 随主题翻转），保证两种主题下的文字对比度，同时
+  // 与色段同色相保持整体配色协调。色段本身用纯时段色（图形元素，非文字）。
+  const costHueText = `color-mix(in srgb, ${periodHue} 55%, var(--dsw-alias-label-primary))`
 
-  // ── 余额卡 ──────────────────────────────────────────────────────────────
-  const balanceBody: any[] = []
-  if (balanceLoading) {
-    balanceBody.push(<div key="b-loading" style={styles.loading}>正在获取余额…</div>)
-  } else if (balanceError !== null) {
-    balanceBody.push(<div key="b-error" style={styles.error}>{balanceError}</div>)
+  if (balanceError !== null) {
+    trackColor = 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 25%, transparent)'
+    stripBackground = 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)'
+    stripBorder = '1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 25%, transparent)'
+    tooltip = `无法获取余额：${balanceError}`
   } else if (balance !== null && balance.ok === false) {
-    if (balance.code === 'missing-key') {
-      // 缺 key 是配置问题：给指引而非错误 + 重试。
-      balanceBody.push(<div key="b-missing" style={styles.notice}>{balance.message}</div>)
-    } else {
-      balanceBody.push(
-        <div key="b-fail" style={styles.error}>{balance.message}</div>,
-        <button key="b-retry" type="button" style={{ ...styles.button, marginTop: '8px' }} onClick={() => void loadBalance()}>
-          重试
-        </button>,
-      )
-    }
+    trackColor = 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 25%, transparent)'
+    stripBackground = 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)'
+    stripBorder = '1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 25%, transparent)'
+    tooltip = balance.message
   } else if (balance !== null && balance.ok === true) {
     if (balance.balances.length === 0) {
-      balanceBody.push(<div key="b-empty" style={styles.loading}>接口未返回余额信息</div>)
-    }
-    for (const entry of balance.balances) {
-      balanceBody.push(
-        <div key={`b-${entry.currency}`}>
-          <div style={styles.bigFigure}>{currencySymbol(entry.currency)}{entry.total}</div>
-          <div style={styles.subFigure}>
-            赠送 {currencySymbol(entry.currency)}{entry.granted}
-            {' · '}
-            充值 {currencySymbol(entry.currency)}{entry.toppedUp}
-          </div>
-        </div>,
-      )
-    }
-    balanceBody.push(
-      <div key="b-badge">
-        <span style={styles.badge(balance.available)}>
-          {balance.available ? '可用于 API 调用' : '余额不足，API 调用可能失败'}
-        </span>
-      </div>,
-      <div key="b-time" style={styles.tiny}>获取于 {formatTime(balance.fetchedAt)}</div>,
-    )
-  }
-  children.push(
-    <div key="balance-card" style={styles.card}>
-      <div style={styles.cardHeader}>
-        <span style={styles.cardTitle}>账户余额</span>
-        <span style={styles.buttonRow}>
-          <button
-            type="button"
-            style={styles.topupButton}
-            title="在新标签页打开 DeepSeek 官方充值页（扫码支付）"
-            onClick={openTopUp}
-          >
-            充值
-          </button>
-          <button type="button" style={styles.button} disabled={balanceLoading} onClick={() => void loadBalance()}>
-            {balanceLoading ? '获取中…' : '刷新'}
-          </button>
-        </span>
-      </div>
-      {balanceBody}
-    </div>,
-  )
-
-  // ── 消耗卡 ──────────────────────────────────────────────────────────────
-  const usageBody: any[] = []
-  if (usageLoading) {
-    usageBody.push(<div key="u-loading" style={styles.loading}>正在统计会话日志…</div>)
-  } else if (usageError !== null) {
-    usageBody.push(
-      <div key="u-error" style={styles.error}>{usageError}</div>,
-      <button key="u-retry" type="button" style={{ ...styles.button, marginTop: '8px' }} onClick={() => void loadUsage(false)}>
-        重试
-      </button>,
-    )
-  } else if (usage !== null && usage.ok === false) {
-    usageBody.push(<div key="u-fail" style={styles.error}>{usage.message}</div>)
-  } else if (usage !== null && usage.ok === true) {
-    const windowEmpty = usage.totals.total === 0
-    if (windowEmpty) {
-      usageBody.push(<div key="u-empty" style={styles.empty}>最近 {String(usage.windowDays)} 天没有消耗记录</div>)
+      tooltip = '接口未返回余额信息'
     } else {
-      usageBody.push(<UsageChart key="u-chart" days={usage.days} currency={usage.costCurrency} />)
-      usageBody.push(
-        <div key="u-totals" style={styles.totalsRow}>
-          <div>
-            近 {String(usage.windowDays)} 天合计：{formatTokens(usage.totals.total)} tokens · {String(usage.days.reduce((sum, day) => sum + day.requests, 0))} 次请求 · 估算费用 {formatCost(usage.totals.cost, usage.costCurrency)}
-          </div>
-          <div>
-            未缓存输入 {formatTokens(usage.totals.uncachedInput)} · 缓存读 {formatTokens(usage.totals.cacheRead)}
-            {' · '}
-            缓存写 {formatTokens(usage.totals.cacheWrite)} · 输出 {formatTokens(usage.totals.output)}
-          </div>
-          <div>
-            历史总计：{formatTokens(usage.allTimeTotal)} tokens · {String(usage.allTimeRequests)} 次请求 · 估算费用 {formatCost(usage.allTimeCost, usage.costCurrency)}
-            （扫描 {String(usage.sessionsScanned)} 个会话{usage.skipped > 0 ? `，跳过 ${String(usage.skipped)} 个` : ''}）
-          </div>
-        </div>,
-      )
+      const primary = balance.balances.find(entry => entry.currency === 'CNY') ?? balance.balances[0]
+      const symbol = currencySymbol(primary.currency)
+      const total = Number.parseFloat(primary.total)
+      balanceValue = `${symbol}${primary.total}`
+      balanceAria = `余额 ${balanceValue}`
+      balanceColor = 'var(--dsw-alias-label-primary)'
+
+      // 今日官方消费（平台账单）。
+      let todayCost: number | null = null
+      if (onlineError !== null) {
+        tooltip = `今日消费 获取失败：${onlineError}`
+      } else if (online !== null && online.ok === false) {
+        tooltip = `今日消费 不可用：${online.message}`
+      } else if (online !== null && online.ok === true) {
+        todayCost = online.todayCost
+        costValue = formatMoney(primary.currency, todayCost)
+        costAria = `今日消费 ${costValue}`
+        costColor = costHueText
+      } else {
+        tooltip = '正在获取今日消费…'
+      }
+
+      if (todayCost !== null && todayCost > 0) {
+        const consumedPct = Number.isFinite(total) && total > 0
+          ? Math.max(0, Math.min(1, todayCost / total))
+          : 0
+        if (consumedPct > 0) {
+          segments = [{ pct: consumedPct, color: periodHue }]
+        }
+      }
     }
   }
-  children.push(
-    <div key="usage-card" style={styles.card}>
-      <div style={styles.cardHeader}>
-        <span style={styles.cardTitle}>
-          Token 消耗
-          <span style={styles.cardTag}>
-            {usage !== null && usage.ok === true ? `近 ${String(usage.windowDays)} 天` : '按天'}
-            {usage !== null && usage.ok === true && usage.cached ? ' · 缓存' : ''}
-          </span>
-        </span>
-        <button type="button" style={styles.button} disabled={usageLoading} onClick={() => void loadUsage(true)}>
-          {usageLoading ? '统计中…' : '重新统计'}
-        </button>
-      </div>
-      {usageBody}
-    </div>,
-  )
 
-  // ── Top API Key 卡 ────────────────────────────────────────────────────────
-  if (!usageLoading && usage !== null && usage.ok === true && (usage.topKeys?.length ?? 0) > 0) {
-    const rows: any[] = []
-    for (const key of usage.topKeys) {
-      const providers = key.providerIds.length > 0 ? key.providerIds.join(' / ') : '(未知 provider)'
-      const modelLines = (key.models ?? [])
-        .map(model => `${model.model} ${formatTokens(model.total)}（${String(model.requests)} 次）· ${formatCost(model.cost, usage.costCurrency)}`)
-        .join('\n')
-      const tooltip = `provider：${providers}\n${String(key.requests)} 次请求 · 估算费用 ${formatCost(key.cost, usage.costCurrency)}\n\n模型消耗：\n${modelLines}`
-      const modelRows = (key.models ?? []).map(model => (
-        <div key={model.model} style={styles.modelRow}>
-          <span style={styles.modelName} title={`${String(model.requests)} 次请求`}>{model.model}</span>
-          <span>{formatCost(model.cost, usage.costCurrency)}</span>
+  const renderFill = (base: Record<string, string | number>): any[] => {
+    const out: any[] = []
+    for (const segment of segments) {
+      out.push(
+        <div
+          key={segment.color}
+          style={{
+            ...base,
+            width: `${Math.round(segment.pct * 1000) / 10}%`,
+            background: segment.color,
+          }}
+        />,
+      )
+    }
+    return out
+  }
+
+  if (!wide) {
+    return (
+      <div style={{ ...styles.layer, ...styles.layerRail }}>
+        <div style={styles.railBox} title={tooltip}>
+          <div style={{ ...styles.railTrack, background: trackColor }}>
+            {renderFill(styles.railFill)}
+          </div>
         </div>
-      ))
-      rows.push(
-        <div key={key.keyName} style={{ ...styles.sessionRow, flexDirection: 'column', alignItems: 'stretch', gap: '2px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={styles.sessionName} title={tooltip}>{key.keyName}</span>
-            <span style={styles.sessionId}>{providers}</span>
-            <span title={`${String(key.requests)} 次请求 · 估算费用 ${formatCost(key.cost, usage.costCurrency)}`}>
-              {formatTokens(key.total)}
+      </div>
+    )
+  }
+
+  // 宽栏：默认只显示进度条；鼠标悬停（或聚焦）时在上方显示「今日消费 / 余额」
+  // 标注，时段区分由颜色承担。
+  return (
+    <div style={styles.layer}>
+      <div
+        style={{ ...styles.strip, background: stripBackground, border: stripBorder }}
+        title={tooltip}
+        onMouseEnter={() => { setHovered(true) }}
+        onMouseLeave={() => { setHovered(false) }}
+        onFocus={() => { setHovered(true) }}
+        onBlur={() => { setHovered(false) }}
+        tabIndex={0}
+      >
+        {hovered && (
+          <div style={styles.labelsRow}>
+            <span style={{ ...styles.label, color: costColor }} aria-label={costAria}>
+              今日消费 {costValue}
+            </span>
+            <span style={{ ...styles.label, color: balanceColor }} aria-label={balanceAria}>
+              余额 {balanceValue}
             </span>
           </div>
-          {modelRows.length > 0
-            ? (
-                <div style={{ paddingLeft: '10px', marginLeft: '2px', borderLeft: '2px solid var(--dsw-alias-border-l1)' }}>
-                  {modelRows}
-                </div>
-              )
-            : null}
-        </div>,
-      )
-    }
-    children.push(
-      <div key="top-card" style={styles.card}>
-        <div style={styles.cardHeader}>
-          <span style={styles.cardTitle}>
-            消耗最多的 API Key
-            <span style={styles.cardTag}>历史总计 Top {String(usage.topKeys.length)}</span>
-          </span>
+        )}
+        <div style={{ ...styles.bar, background: trackColor }}>
+          {renderFill(styles.segment)}
         </div>
-        {rows}
-      </div>,
-    )
-  }
-
-  children.push(
-    <div key="footnote" style={styles.tiny}>
-      注：统计只含已落盘的会话日志，进行中的会话未落盘事件暂不计入；fork / 子代理会话已去除继承的父会话部分。消耗按请求的 provider 路由归属到对应 API key（凭据引用名），同名 key 的多个 provider 会合并。费用为估算：按 DeepSeek V4 峰谷价（空闲为基准、高峰 09:00–14:00 北京 ×2，2026-08-17 生效）折算；历史消耗按现价近似；未配置价格的模型（如 qwen3.8-max）不计费（显示 —），可在插件行配置 pricesPerM 补充。
-    </div>,
+      </div>
+    </div>
   )
-
-  return <div style={styles.root}>{children}</div>
 }
 
 export function apply(ctx: any): void {
-  // 注册到设置页 section 列表（id 与插件名保持一致：dsh-balance）。
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'dsh-balance',
-    order: 30,
-    label: () => 'DeepSeek 账户',
-  }, BalanceSection))
+  // 注册到侧边栏 footer 动作列表（id 与插件名保持一致：dsh-balance）。
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
+    {
+      name: 'sidebar.footer.action',
+      id: 'dsh-balance',
+      order: 10,
+      label: () => 'DeepSeek 账户',
+    },
+    BalanceFooterAction,
+  ))
 }

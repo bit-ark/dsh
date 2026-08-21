@@ -1,5 +1,202 @@
+// src/platform.ts
+var PLATFORM_BASE_URL = "https://platform.deepseek.com";
+var PLATFORM_USAGE_COST_PATH = "/api/v0/usage/cost";
+var PLATFORM_USAGE_BY_API_KEY_COST_PATH = "/api/v0/usage/by_api_key/cost";
+var PLATFORM_TIMEOUT_MS = 1e4;
+var BEIJING_TZ_OFFSET_SECONDS = 28800;
+function beijingMonthKey(nowMs) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit"
+    }).formatToParts(new Date(nowMs));
+    const value = (type) => Number(parts.find((part) => part.type === type)?.value ?? "0");
+    return { year: value("year"), month: value("month") };
+  } catch {
+    const date = new Date(nowMs);
+    return { year: date.getFullYear(), month: date.getMonth() + 1 };
+  }
+}
+function beijingDateKey(nowMs) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date(nowMs));
+    const value = (type) => parts.find((part) => part.type === type)?.value ?? "";
+    return `${value("year")}-${value("month")}-${value("day")}`;
+  } catch {
+    const date = new Date(nowMs);
+    const two2 = (n) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}-${two2(date.getMonth() + 1)}-${two2(date.getDate())}`;
+  }
+}
+var AUTH_CODES = /* @__PURE__ */ new Set([40002, 40003]);
+async function fetchPlatformTodayCost(token, preferredCurrency) {
+  const nowMs = Date.now();
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json",
+    "x-app-version": "1.0.0",
+    Origin: PLATFORM_BASE_URL,
+    Referer: `${PLATFORM_BASE_URL}/usage`
+  };
+  const startEnd = beijingTodayRange(nowMs);
+  const byKey = await fetchCost(
+    `${PLATFORM_BASE_URL}${PLATFORM_USAGE_BY_API_KEY_COST_PATH}?start=${String(startEnd.start)}&end=${String(startEnd.end)}&tz=${String(BEIJING_TZ_OFFSET_SECONDS)}`,
+    headers
+  );
+  if (byKey.ok) return byKey;
+  if (byKey.code !== "upstream") return byKey;
+  const key = beijingMonthKey(nowMs);
+  return fetchCost(
+    `${PLATFORM_BASE_URL}${PLATFORM_USAGE_COST_PATH}?month=${String(key.month)}&year=${String(key.year)}`,
+    headers,
+    nowMs,
+    preferredCurrency
+  );
+}
+async function fetchCost(url, headers, nowMs, preferredCurrency) {
+  let response;
+  try {
+    response = await fetch(url, { headers, signal: AbortSignal.timeout(PLATFORM_TIMEOUT_MS) });
+  } catch (error) {
+    const aborted = error?.name === "TimeoutError";
+    return {
+      ok: false,
+      code: "network",
+      message: aborted ? `\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8BF7\u6C42\u8D85\u65F6\uFF08${String(PLATFORM_TIMEOUT_MS / 1e3)}s\uFF09` : `\u7F51\u7EDC\u9519\u8BEF\uFF1A${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  if (!response.ok) {
+    return { ok: false, code: "upstream", message: `\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE HTTP ${String(response.status)}` };
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  return parsePlatformCostToday(body, nowMs ?? Date.now(), preferredCurrency);
+}
+function beijingTodayRange(nowMs) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date(nowMs));
+  const get = (type) => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const year = get("year");
+  const month = get("month");
+  const day = get("day");
+  const startUtcMs = Date.UTC(year, month - 1, day, 0, 0, 0) - 8 * 3600 * 1e3;
+  const endUtcMs = startUtcMs + 864e5;
+  return { start: Math.floor(startUtcMs / 1e3), end: Math.floor(endUtcMs / 1e3), month, year };
+}
+function parsePlatformCostToday(body, nowMs, preferredCurrency) {
+  if (body === null || typeof body !== "object") {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  if (body.code !== void 0 && body.code !== 0) {
+    if (AUTH_CODES.has(body.code)) return platformAuthError();
+    return { ok: false, code: "upstream", message: `\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u9519\u8BEF code ${String(body.code)}` };
+  }
+  const data = body.data;
+  if (data === null || typeof data !== "object") {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  if (data.biz_code !== void 0 && data.biz_code !== 0) {
+    if (AUTH_CODES.has(data.biz_code)) return platformAuthError();
+    return { ok: false, code: "upstream", message: `\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u9519\u8BEF biz_code ${String(data.biz_code)}` };
+  }
+  const raw = data.biz_data;
+  if (raw === null || typeof raw !== "object") {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  if (!Array.isArray(raw) && Array.isArray(raw.data)) {
+    return parseTimeSeriesCost(raw, preferredCurrency);
+  }
+  return parseDailyCost(raw, nowMs, preferredCurrency);
+}
+function parseDailyCost(raw, nowMs, preferredCurrency) {
+  const items = Array.isArray(raw) ? raw : [raw];
+  const today = beijingDateKey(nowMs);
+  const computed = [];
+  for (const item of items) {
+    if (item === null || typeof item !== "object") continue;
+    const currency = typeof item.currency === "string" ? item.currency : "";
+    let total = 0;
+    const days = Array.isArray(item.days) ? item.days : [];
+    for (const day of days) {
+      if (day === null || typeof day !== "object" || day.date !== today) continue;
+      const models = Array.isArray(day.data) ? day.data : [];
+      for (const model of models) {
+        if (model === null || typeof model !== "object") continue;
+        const usage = Array.isArray(model.usage) ? model.usage : [];
+        for (const entry of usage) {
+          if (entry === null || typeof entry !== "object") continue;
+          const type = typeof entry.type === "string" ? entry.type.toUpperCase() : "";
+          if (type === "REQUEST") continue;
+          const value = Number(entry.amount);
+          if (Number.isFinite(value)) total += value;
+        }
+      }
+    }
+    computed.push({ total, currency });
+  }
+  return pickCost(computed, preferredCurrency);
+}
+function parseTimeSeriesCost(bizData, preferredCurrency) {
+  const dataArray = Array.isArray(bizData.data) ? bizData.data : [];
+  if (dataArray.length === 0) {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  const computed = [];
+  for (const entry of dataArray) {
+    if (entry === null || typeof entry !== "object") continue;
+    const currency = typeof entry.currency === "string" ? entry.currency : "";
+    let total = 0;
+    const series = Array.isArray(entry.series) ? entry.series : [];
+    for (const s of series) {
+      if (s === null || typeof s !== "object") continue;
+      const buckets = Array.isArray(s.buckets) ? s.buckets : [];
+      for (const bucket of buckets) {
+        if (bucket === null || typeof bucket !== "object") continue;
+        const value = Number(bucket.cost);
+        if (Number.isFinite(value)) total += value;
+      }
+    }
+    computed.push({ total, currency });
+  }
+  return pickCost(computed, preferredCurrency);
+}
+function pickCost(computed, preferredCurrency) {
+  if (computed.length === 0) {
+    return { ok: false, code: "upstream", message: "\u5E73\u53F0\u7528\u91CF\u63A5\u53E3\u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9" };
+  }
+  const withData = computed.filter((entry) => entry.total > 0);
+  let chosen;
+  if (withData.length > 0) {
+    chosen = preferredCurrency !== void 0 ? withData.find((entry) => entry.currency === preferredCurrency) ?? withData[0] : withData[0];
+  } else {
+    chosen = preferredCurrency !== void 0 ? computed.find((entry) => entry.currency === preferredCurrency) ?? computed[0] : computed[0];
+  }
+  return { ok: true, todayCost: chosen.total, currency: chosen.currency };
+}
+function platformAuthError() {
+  return {
+    ok: false,
+    code: "platform-auth",
+    message: "\u5E73\u53F0 Token \u65E0\u6548\u6216\u5DF2\u8FC7\u671F\uFF1A\u8BF7\u5728 platform.deepseek.com \u91CD\u65B0\u767B\u5F55\u540E\uFF0C\u4ECE\u6D4F\u89C8\u5668 localStorage \u590D\u5236\u65B0\u7684 userToken \u66F4\u65B0\u914D\u7F6E"
+  };
+}
+
 // src/usage-fold.ts
-var DEFAULT_PEAK_HOURS = [9, 10, 11, 12, 13];
+var DEFAULT_PEAK_HOURS = [9, 10, 11, 14, 15, 16, 17];
 var BEIJING_OFFSET_MS = 8 * 36e5;
 function beijingHour(ms) {
   return new Date(ms + BEIJING_OFFSET_MS).getUTCHours();
@@ -24,6 +221,22 @@ function sumCost(samples, prices, peakHours) {
     priced += 1;
   }
   return priced === 0 ? void 0 : total;
+}
+function splitTodayCost(samples, nowMs, prices, peakHours = DEFAULT_PEAK_HOURS) {
+  const today = localDate(nowMs);
+  const result = { peak: 0, offPeak: 0, total: 0, priced: false };
+  for (const sample of samples) {
+    if (sample.time <= 0) continue;
+    const { year, month, day } = localDate(sample.time);
+    if (year !== today.year || month !== today.month || day !== today.day) continue;
+    const cost = costOfSample(sample, prices, peakHours);
+    if (cost === void 0) continue;
+    result.priced = true;
+    if (peakHours.includes(beijingHour(sample.time))) result.peak += cost;
+    else result.offPeak += cost;
+  }
+  result.total = result.peak + result.offPeak;
+  return result;
 }
 function count(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
@@ -207,8 +420,26 @@ function resolveConfig(config) {
     cacheTtlMs,
     costCurrency: config?.costCurrency === "USD" ? "USD" : "CNY",
     prices,
-    peakHours
+    peakHours,
+    // 平台 userToken 不在 resolveConfig 里解析凭据（resolve 是异步的），
+    // 这里只归一化配置直给值；最终解析见 resolvePlatformToken。
+    platformToken: nonEmptyString(config?.platformToken) ? config.platformToken.trim() : ""
   };
+}
+async function resolvePlatformToken(ctx, resolved) {
+  if (resolved.platformToken !== "") return resolved.platformToken;
+  const credentials = ctx.get("credentials");
+  if (credentials !== void 0 && typeof credentials.resolve === "function") {
+    try {
+      const hit = await credentials.resolve("DEEPSEEK_PLATFORM_TOKEN");
+      if (hit !== void 0 && nonEmptyString(hit.value)) return hit.value;
+    } catch (error) {
+      ctx.logger?.warn?.(new Error(`deepseek-balance: platform-token resolve failed: ${String(error)}`));
+    }
+  }
+  const ambient = process.env.DEEPSEEK_PLATFORM_TOKEN;
+  if (nonEmptyString(ambient)) return ambient;
+  return void 0;
 }
 function roundCost(value) {
   return Math.round(value * 100) / 100;
@@ -431,6 +662,13 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
     requests: entry.requests,
     cost: entry.priced ? roundCost(entry.cost) : null
   })).sort((left, right) => right.total - left.total).slice(0, 5);
+  const todayCostRaw = splitTodayCost(allSamples, nowMs, resolved.prices, resolved.peakHours);
+  const todayCost = {
+    peak: roundCost(todayCostRaw.peak),
+    offPeak: roundCost(todayCostRaw.offPeak),
+    total: roundCost(todayCostRaw.total),
+    priced: todayCostRaw.priced
+  };
   return {
     ok: true,
     days: dayBuckets,
@@ -443,6 +681,7 @@ async function computeUsage(ctx, persistence, days, config, resolved) {
     allTimeRequests,
     allTimeCost,
     costCurrency: resolved.costCurrency,
+    todayCost,
     topSessions: perSession.filter((entry) => entry.total > 0).slice(0, 5),
     topKeys,
     sessionsScanned: headers.length - skipped,
@@ -474,6 +713,25 @@ function apply(ctx, config) {
       usageInflight.set(key, inflight);
     }
     return inflight;
+  };
+  let onlineCache = null;
+  const getOnlineToday = async (token) => {
+    if (onlineCache !== null && Date.now() - onlineCache.at < resolved.cacheTtlMs) {
+      return { ...onlineCache.result, cached: true };
+    }
+    const result = await fetchPlatformTodayCost(token, resolved.costCurrency);
+    if (result.ok === false && (result.code === "platform-auth" || result.code === "missing-token")) {
+      return { ...result, cached: false };
+    }
+    const wire = result.ok ? {
+      ok: true,
+      todayCost: roundCost(result.todayCost),
+      currency: result.currency,
+      fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      cached: false
+    } : { ...result, cached: false };
+    onlineCache = { at: Date.now(), result: wire };
+    return wire;
   };
   const handler = async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
@@ -507,6 +765,19 @@ function apply(ctx, config) {
         sendJson(res, 200, await getUsage(days, refresh));
         return;
       }
+      if (pathname === "/dsh-balance/online") {
+        const token = await resolvePlatformToken(ctx, resolved);
+        if (token === void 0) {
+          sendJson(res, 200, {
+            ok: false,
+            code: "missing-token",
+            message: "\u672A\u914D\u7F6E\u5E73\u53F0 Token\uFF08userToken\uFF09\uFF1A\u8BF7\u767B\u5F55 platform.deepseek.com\uFF0C\u6309 F12 \u2192 Application \u2192 Local Storage \u2192 https://platform.deepseek.com \u590D\u5236 userToken\uFF0C\u914D\u7F6E\u5230\u63D2\u4EF6 platformToken\uFF08\u6216 DEEPSEEK_PLATFORM_TOKEN \u51ED\u636E/\u73AF\u5883\u53D8\u91CF\uFF09\u540E\u91CD\u542F"
+          });
+          return;
+        }
+        sendJson(res, 200, await getOnlineToday(token));
+        return;
+      }
       sendJson(res, 404, { ok: false, code: "not-found", message: `unknown route ${JSON.stringify(pathname)}` });
     } catch (error) {
       ctx.logger?.warn?.(new Error(`deepseek-balance: ${String(error)}`));
@@ -521,11 +792,15 @@ function apply(ctx, config) {
 export {
   DEFAULT_PEAK_HOURS,
   apply,
+  beijingDateKey,
+  beijingMonthKey,
   buildDayBuckets,
   costOfSample,
   foldSessionUsage,
   inject,
   name,
+  parsePlatformCostToday,
+  splitTodayCost,
   sumCost,
   sumSamples,
   totalOf,

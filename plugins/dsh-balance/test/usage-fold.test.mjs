@@ -8,6 +8,7 @@ import {
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  splitTodayCost,
   sumCost,
   sumSamples,
   totalOf,
@@ -284,6 +285,45 @@ const header = { id: 'session-test' }
   ])
   assert.equal(fold.totals.output, 7, '同 (turn,step) 后到者胜')
   console.log('ok (n) last-wins by event order (documented)')
+}
+
+// ── (o) 今日消费峰谷拆分 ──────────────────────────────────────────────────────
+{
+  const prices = {
+    'deepseek-v4-flash': { inputMiss: 1.5, inputHit: 0.05, output: 4.5 },
+  }
+  const mk = (time, model = 'deepseek-v4-flash') => ({
+    time,
+    provider: 'deepseek-official',
+    model,
+    buckets: { uncachedInput: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+  })
+  // 用 UTC 构造北京时刻，与时区无关：北京 18:00 = UTC 10:00（低谷），
+  // 北京 10:00 = UTC 02:00（高峰）。NOW 为北京 08-17 23:00（UTC 15:00）。
+  const todayOff = Date.UTC(2026, 7, 17, 10, 0)   // 北京 08-17 18:00，低谷
+  const todayPeak = Date.UTC(2026, 7, 17, 2, 0)   // 北京 08-17 10:00，高峰
+  const yesterday = Date.UTC(2026, 7, 16, 10, 0)  // 非今日，丢弃
+
+  // 每条 100 万未命中输入：低谷 1.5，高峰 ×2 = 3.0。
+  const split = splitTodayCost(
+    [mk(todayOff), mk(todayPeak), mk(yesterday)],
+    NOW,
+    prices,
+    DEFAULT_PEAK_HOURS,
+  )
+  assert.ok(Math.abs(split.peak - 3.0) < 1e-9, `peak share ${String(split.peak)}`)
+  assert.ok(Math.abs(split.offPeak - 1.5) < 1e-9, `off-peak share ${String(split.offPeak)}`)
+  assert.ok(Math.abs(split.total - 4.5) < 1e-9, `total ${String(split.total)}`)
+  assert.equal(split.priced, true)
+
+  // 无价格配置的模型 / 无价格表：priced = false，total = 0（不计费而非未知）。
+  const unpriced = splitTodayCost([mk(todayOff, 'qwen3.8-max')], NOW, prices, DEFAULT_PEAK_HOURS)
+  assert.equal(unpriced.priced, false)
+  assert.equal(unpriced.total, 0)
+  const noTable = splitTodayCost([mk(todayOff)], NOW, undefined, DEFAULT_PEAK_HOURS)
+  assert.equal(noTable.priced, false)
+  assert.equal(noTable.total, 0)
+  console.log('ok (o) today cost peak/off-peak split')
 }
 
 console.log('usage-fold tests: all passed')

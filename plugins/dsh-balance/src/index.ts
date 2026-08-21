@@ -29,11 +29,13 @@
  * 本插件全程只读：不写会话 / 设置 / 磁盘，无定时器（缓存只是时间戳比较）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fetchPlatformTodayCost } from './platform.ts'
 import {
   buildDayBuckets,
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  splitTodayCost,
   sumCost,
   sumSamples,
   totalOf,
@@ -48,11 +50,15 @@ export {
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  splitTodayCost,
   sumCost,
   sumSamples,
   totalOf,
   zeroBuckets,
 }
+
+// 平台私有用量解析（纯函数）同样导出，测试套件直接断言。
+export { beijingDateKey, beijingMonthKey, parsePlatformCostToday } from './platform.ts'
 
 /** 插件名：与包名 / 组合行 id / 客户端模块 id 保持一致（dsh-* 前缀）。 */
 export const name = 'dsh-balance'
@@ -101,8 +107,16 @@ interface Config {
    * 未配置价格的模型不计费（费用显示为「—」）。
    */
   pricesPerM?: Record<string, ModelPrice>
-  /** 高峰时段（北京时间小时 0..23）；落在其中的请求按单价 ×2。默认 09:00–14:00。 */
+  /** 高峰时段（北京时间小时 0..23）；落在其中的请求按单价 ×2。默认 09:00–12:00 与 14:00–18:00。 */
   peakHours?: number[]
+  /**
+   * DeepSeek 平台会话 userToken（浏览器 localStorage 的值，非 API key）。
+   * 官方没有面向 API key 的用量接口，精确的今日消费只能调平台私有
+   * usage/cost 接口（见 src/platform.ts）。解析优先级：本配置 →
+   * credentials 凭据 `DEEPSEEK_PLATFORM_TOKEN` → 环境变量同名回退。
+   * 该 token 是账号会话凭证：只在请求头使用，绝不回显 / 记日志。
+   */
+  platformToken?: string
 }
 
 /** 本插件触及的 harness 服务的最小结构视图。 */
@@ -149,6 +163,12 @@ interface UsageResult {
   allTimeCost: CostWire
   /** 费用展示币种（'CNY' | 'USD'），客户端据此选择符号。 */
   costCurrency: string
+  /**
+   * 今日（本地日历日）消费按峰谷拆分（元）：peak = 高峰时段消费，offPeak =
+   * 低谷时段消费，total = 两者之和。侧边栏小部件把今日消费画成两段颜色。
+   * priced = 今日是否有可计价样本（未配置价格的模型不计费，total 为 0）。
+   */
+  todayCost: { peak: number; offPeak: number; total: number; priced: boolean }
   topSessions: Array<{ sessionId: string; cwdLabel: string; total: number }>
   /** 按 API key（凭据引用）分组的全量消耗，取 top 5；含模型级细分与费用。 */
   topKeys: Array<{
@@ -180,6 +200,8 @@ interface ResolvedConfig {
   costCurrency: 'CNY' | 'USD'
   prices: PriceTable
   peakHours: number[]
+  /** 平台会话 userToken（可能为空——此时 /online 返回 missing-token）。 */
+  platformToken: string
 }
 
 /**
@@ -216,7 +238,7 @@ function resolveConfig(config: Config | undefined): ResolvedConfig {
       }
     }
   }
-  // 高峰时段：默认 09:00–14:00 北京；只收 0..23 的合法整数小时。
+  // 高峰时段：默认北京时间 09:00–12:00 与 14:00–18:00；只收 0..23 的合法整数小时。
   const peakHours = Array.isArray(config?.peakHours) && config.peakHours.length > 0
     ? [...new Set(config.peakHours.map(hour => Math.trunc(Number(hour)))
       .filter(hour => Number.isFinite(hour) && hour >= 0 && hour <= 23))]
@@ -230,7 +252,34 @@ function resolveConfig(config: Config | undefined): ResolvedConfig {
     costCurrency: config?.costCurrency === 'USD' ? 'USD' : 'CNY',
     prices,
     peakHours,
+    // 平台 userToken 不在 resolveConfig 里解析凭据（resolve 是异步的），
+    // 这里只归一化配置直给值；最终解析见 resolvePlatformToken。
+    platformToken: nonEmptyString(config?.platformToken) ? config.platformToken.trim() : '',
   }
+}
+
+/**
+ * 解析 DeepSeek 平台会话 userToken，优先级从高到低：
+ * 1. 行配置 `platformToken`（归一化后）；
+ * 2. `credentials` 凭据接缝 `DEEPSEEK_PLATFORM_TOKEN`（与 API key 同机制，
+ *    可写入 ~/.dsh/.credentials.yaml 或环境）；
+ * 3. 进程环境变量 `DEEPSEEK_PLATFORM_TOKEN`。
+ * 返回 undefined 表示未配置。token 只在请求头使用，绝不回显 / 记日志。
+ */
+async function resolvePlatformToken(ctx: any, resolved: ResolvedConfig): Promise<string | undefined> {
+  if (resolved.platformToken !== '') return resolved.platformToken
+  const credentials = ctx.get('credentials') as CredentialsLike | undefined
+  if (credentials !== undefined && typeof credentials.resolve === 'function') {
+    try {
+      const hit = await credentials.resolve('DEEPSEEK_PLATFORM_TOKEN')
+      if (hit !== undefined && nonEmptyString(hit.value)) return hit.value
+    } catch (error) {
+      ctx.logger?.warn?.(new Error(`deepseek-balance: platform-token resolve failed: ${String(error)}`))
+    }
+  }
+  const ambient = process.env.DEEPSEEK_PLATFORM_TOKEN
+  if (nonEmptyString(ambient)) return ambient
+  return undefined
 }
 
 /** 两位小数（费用聚合后统一取整，避免浮点噪声累积展示）。 */
@@ -538,6 +587,16 @@ async function computeUsage(
     .sort((left, right) => right.total - left.total)
     .slice(0, 5)
 
+  // 今日消费按峰谷拆分（元，两位小数）：小部件把今日消费画成高峰/低谷两段。
+  // 与 buildDayBuckets 同口径（本地日历日 + 北京时间峰谷判定 + ×2 高峰价）。
+  const todayCostRaw = splitTodayCost(allSamples, nowMs, resolved.prices, resolved.peakHours)
+  const todayCost = {
+    peak: roundCost(todayCostRaw.peak),
+    offPeak: roundCost(todayCostRaw.offPeak),
+    total: roundCost(todayCostRaw.total),
+    priced: todayCostRaw.priced,
+  }
+
   return {
     ok: true,
     days: dayBuckets,
@@ -550,6 +609,7 @@ async function computeUsage(
     allTimeRequests,
     allTimeCost,
     costCurrency: resolved.costCurrency,
+    todayCost,
     topSessions: perSession.filter(entry => entry.total > 0).slice(0, 5),
     topKeys,
     sessionsScanned: headers.length - skipped,
@@ -597,6 +657,31 @@ export function apply(ctx: any, config: Config | undefined): void {
     return inflight
   }
 
+  // 官方今日消费（平台私有接口）的短缓存：余额变化慢，5 分钟足够；token
+  // 失效时不缓存（下次请求立即重新探测，用户更新 token 后无需等缓存过期）。
+  let onlineCache: { at: number; result: Record<string, unknown> } | null = null
+  const getOnlineToday = async (token: string): Promise<Record<string, unknown>> => {
+    if (onlineCache !== null && Date.now() - onlineCache.at < resolved.cacheTtlMs) {
+      return { ...onlineCache.result, cached: true }
+    }
+    const result = await fetchPlatformTodayCost(token, resolved.costCurrency)
+    if (result.ok === false && (result.code === 'platform-auth' || result.code === 'missing-token')) {
+      // 凭证失效类错误不缓存：用户更新 token 后立即生效。
+      return { ...result, cached: false }
+    }
+    const wire = result.ok
+      ? {
+          ok: true as const,
+          todayCost: roundCost(result.todayCost),
+          currency: result.currency,
+          fetchedAt: new Date().toISOString(),
+          cached: false,
+        }
+      : { ...result, cached: false }
+    onlineCache = { at: Date.now(), result: wire }
+    return wire
+  }
+
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://x')
     const pathname = url.pathname
@@ -630,6 +715,20 @@ export function apply(ctx: any, config: Config | undefined): void {
         }
         const refresh = url.searchParams.get('refresh') === '1'
         sendJson(res, 200, await getUsage(days, refresh))
+        return
+      }
+      if (pathname === '/dsh-balance/online') {
+        // 官方今日消费（平台私有 usage/cost 接口，需 userToken）。
+        const token = await resolvePlatformToken(ctx, resolved)
+        if (token === undefined) {
+          sendJson(res, 200, {
+            ok: false,
+            code: 'missing-token',
+            message: '未配置平台 Token（userToken）：请登录 platform.deepseek.com，按 F12 → Application → Local Storage → https://platform.deepseek.com 复制 userToken，配置到插件 platformToken（或 DEEPSEEK_PLATFORM_TOKEN 凭据/环境变量）后重启',
+          })
+          return
+        }
+        sendJson(res, 200, await getOnlineToday(token))
         return
       }
       sendJson(res, 404, { ok: false, code: 'not-found', message: `unknown route ${JSON.stringify(pathname)}` })
