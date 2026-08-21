@@ -30,7 +30,7 @@ const h = React.createElement
 			h("path", { d: "M20 12a8 8 0 1 1-2.34-5.66" }),
 			h("path", { d: "M20 4v4h-4" }),
 		);
-		export const closeIcon = () => h(IconFrame, null, h("path", { d: "M6 6l12 12M18 6L6 18" }));
+		export const closeIcon = (size) => h(IconFrame, size === undefined ? null : { size }, h("path", { d: "M6 6l12 12M18 6L6 18" }));
 		export const kanbanIcon = () => h(IconFrame, { size: 15 },
 			h("rect", { x: "3", y: "4", width: "5", height: "13", rx: "1" }),
 			h("rect", { x: "9.5", y: "4", width: "5", height: "16", rx: "1" }),

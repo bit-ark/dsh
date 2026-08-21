@@ -3,17 +3,27 @@
  *
  * 每个功能声明元数据：id / label / icon / component / 是否单实例 / 是否可关闭 / 是否禁用。
  * 新增功能只需在此注册 + 加图标，无需改动 panel.js。
- * closable 与运行时规则一致：单实例标签常驻不可关闭（见 panel.js openFeature）。
+ * singleInstance：重复打开只聚焦已有标签；closable：标签是否显示关闭按钮。
  */
 import React from 'react'
+import { FilesPanel } from './files-panel.js'
 import { GitPanel } from './git-panel.js'
 import { BrowserView } from './browser-view.js'
 import { TerminalPanel } from './terminal-panel.js'
 import { TaskboardPanel } from './taskboard/panel.js'
-import { branchIcon, browserIcon, terminalIcon, kanbanIcon } from './icons.js'
+import { branchIcon, browserIcon, folderIcon, terminalIcon, kanbanIcon } from './icons.js'
 const h = React.createElement
 
 export const FEATURES = [
+  {
+    id: 'files',
+    label: '目录',
+    description: '文件目录树与预览',
+    icon: folderIcon,
+    component: FilesPanel,
+    singleInstance: true,
+    closable: true,
+  },
   {
     id: 'git',
     label: 'Git',
@@ -21,7 +31,7 @@ export const FEATURES = [
     icon: branchIcon,
     component: GitPanel,
     singleInstance: true,
-    closable: false,
+    closable: true,
   },
   {
     id: 'browser',
@@ -48,7 +58,7 @@ export const FEATURES = [
     icon: kanbanIcon,
     component: TaskboardPanel,
     singleInstance: true,
-    closable: false,
+    closable: true,
   },
 ]
 

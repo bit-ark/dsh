@@ -269,7 +269,7 @@
 .dwb-tb-meta { flex: none; font-size: 10px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
 .dwb-tb-search { flex: 1; min-width: 80px; height: 26px; padding: 0 8px; font-size: 12px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; outline: none; }
 .dwb-tb-search:focus { border-color: var(--dsw-alias-state-business-primary); }
-.dwb-tb-btn { flex: none; height: 26px; padding: 0 10px; font-size: 12px; line-height: 1; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s; }
+.dwb-tb-btn { flex: none; height: 26px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 12px; line-height: 1; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s; }
 .dwb-tb-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .dwb-tb-btn:disabled { opacity: .45; cursor: default; }
 .dwb-tb-btn-primary { background: var(--dsw-alias-state-business-primary); border-color: var(--dsw-alias-state-business-primary); color: #fff; }

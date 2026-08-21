@@ -13,6 +13,7 @@ import { fetchOptions, fetchState, sendAction } from './api.js'
 import { formatHostTimestamp, formatTime } from './format.js'
 import { TaskDetail } from './detail.js'
 import { NewTaskModal, ConfirmDialog } from './new-task.js'
+import { backIcon, plusIcon, trayDownIcon } from '../icons.js'
 const h = React.createElement
 const { useCallback, useEffect, useMemo, useRef, useState } = React
 
@@ -203,9 +204,6 @@ export function TaskboardPanel(props) {
   return h('div', { className: 'dwb-tb' },
     h('header', { className: 'dwb-tb-header' },
       h('h3', { className: 'dwb-tb-title' }, '任务看板'),
-      snapshot !== undefined
-        ? h('span', { className: 'dwb-tb-meta' }, `rev ${snapshot.revision} · ${timeZone ?? ''}`)
-        : null,
       h('input', {
         className: 'dwb-tb-search',
         type: 'search',
@@ -218,7 +216,9 @@ export function TaskboardPanel(props) {
         type: 'button',
         className: archiveView ? 'dwb-tb-btn dwb-tb-btn-primary' : 'dwb-tb-btn',
         onClick: () => setArchiveView((prev) => !prev),
-      }, archiveView ? '返回看板' : `归档 (${archivedCount})`),
+        title: archiveView ? '返回看板' : `查看归档任务（${archivedCount}）`,
+        'aria-label': archiveView ? '返回看板' : `归档（${archivedCount}）`,
+      }, archiveView ? backIcon() : trayDownIcon()),
       h('button', {
         type: 'button',
         className: 'dwb-tb-btn dwb-tb-btn-primary',
@@ -227,7 +227,9 @@ export function TaskboardPanel(props) {
           // 工作区/预设可能在挂载后变化：每次打开模态都重拉选项。
           fetchOptions().then(setOptions).catch(() => { /* 失败保持已有选项 */ })
         },
-      }, '+ 新建任务'),
+        title: '新建任务',
+        'aria-label': '新建任务',
+      }, plusIcon()),
     ),
 
     error !== undefined

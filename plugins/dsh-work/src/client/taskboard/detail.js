@@ -6,6 +6,7 @@
  * src/taskboard/schedule.js（esbuild 打进客户端 bundle，纯函数无 node 依赖）。
  */
 import React from 'react'
+import { closeIcon } from '../icons.js'
 import { isValidCron, nextRunAtMs } from '../../taskboard/schedule.js'
 import { formatHostTimestamp, formatTime } from './format.js'
 import { ConfirmDialog } from './new-task.js'
@@ -241,7 +242,7 @@ export function TaskDetail(props) {
         h('span', { className: 'dwb-tb-status-badge', 'data-status': archived ? 'archived' : task.status },
           archived ? '已归档' : statusLabel[task.status],
         ),
-        h('button', { type: 'button', className: 'dwb-tb-iconbtn', 'aria-label': '关闭', onClick: onClose }, '×'),
+        h('button', { type: 'button', className: 'dwb-tb-iconbtn', title: '关闭', 'aria-label': '关闭', onClick: onClose }, closeIcon()),
       ),
 
       h('div', { className: 'dwb-tb-detail-body' },

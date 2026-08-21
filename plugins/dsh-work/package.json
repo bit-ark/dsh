@@ -1,6 +1,6 @@
 {
   "name": "@bit-ark/dsh-work",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Right-docked workbench panel with multi-instance tab system: file/dir tree, git operations, sandboxed browser with Eruda devtools, interactive multi-terminal (node-pty + xterm.js over WebSocket), and a task board (Host-authoritative ledger, real DSH session execution, Host cron scheduling), plus extensible feature registry. Features open as tabs from a grid home, multiple instances supported.",
   "type": "module",
   "main": "lib/index.js",
