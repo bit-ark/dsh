@@ -1,0 +1,36 @@
+dsh-work — Third-Party Notice
+=============================
+
+The task board feature (任务看板) — host modules under src/taskboard/ and
+client modules under src/client/taskboard/ — is a port of code from:
+
+  dsh-web-ui — packages/dsh-task-board
+  https://github.com/zhu1090093659/dsh-web-ui
+  Copyright the dsh-web-ui authors
+  Licensed under the Apache License, Version 2.0
+
+Portions ported (2025):
+  src/core/schedule.ts        → src/taskboard/schedule.js
+  src/core/tasks.ts           → src/taskboard/domain.js
+  src/core/use-cases/*        → src/taskboard/domain.js
+  src/core/store.ts           → src/taskboard/parse.js
+  shared/host/dsh-home.ts     → src/taskboard/dsh-home.js
+  src/host-ledger.ts          → src/taskboard/ledger.js
+  src/host-runner.ts          → src/taskboard/runner.js
+  src/host-service.ts         → src/taskboard/service.js
+  src/protocol.ts             → src/taskboard/protocol.js
+  src/host-routes.ts (shape)  → src/taskboard/routes.js
+  src/client/board/*          → src/client/taskboard/{panel,detail,new-task}.js
+  src/client/board/TaskCard timestamp helpers → src/client/taskboard/format.js
+
+Modifications from the original: TypeScript converted to plain JavaScript;
+browser v1 import action, cross-browser merge, idle-sleep (power) inhibitor,
+trusted reverse-proxy token access, SSE event stream, system-prompt
+announcement section, and settings card removed; HTTP routes moved to the
+/workbench/taskboard/* namespace; ledger directory moved to
+$DSH_HOME/dsh-work; client UI adapted to dsh-work's tab system (no sidebar
+injection, no center-column takeover; polling instead of SSE); copy
+simplified to Chinese.
+
+The Apache License 2.0 text is available at
+http://www.apache.org/licenses/LICENSE-2.0

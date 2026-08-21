@@ -1,7 +1,8 @@
 # dsh-work
 
-为 DeepSeek Harness Web GUI 增加右侧停靠的「工作面板」：目录树 + Git 提交图与基本
-Git 操作，并支持点击文件在面板内预览内容。
+为 DeepSeek Harness Web GUI 增加右侧停靠的「工作面板」：多实例标签页架构，支持目录
+树、Git、浏览器（含 Eruda 调试面板）、多终端（node-pty + xterm.js，WebSocket 双向流）
+等功能，每个功能可同时运行多个实例，新功能通过注册机制即插即用。
 
 - **面板**：右侧停靠（`shell.overlay` 插槽，id: workbench），可收起为右侧边缘按钮；
   顶部路径框可手动指定工作目录（缺省跟随当前会话 cwd）。**宽度可拖拽调整**：拖动
@@ -52,6 +53,41 @@ Git 操作，并支持点击文件在面板内预览内容。
   /workbench/open`，优先 `code -r` 复用窗口，回退系统默认编辑器）。
 - **Git tab**：分支、提交图（HEAD 标记）、工作区变更（暂存/取消暂存/全部暂存/
   忽略/取消忽略）、提交框与一键 init（非仓库时）。
+- **浏览器 tab**：沙箱浏览器——URL 栏输入网址（自动补全 https），服务端抓取 HTML、
+  注入 `<base>` 让资源从源站加载、把所有 `<a href>` 重写回代理保持导航受控，以
+  `sandbox="allow-scripts allow-forms allow-popups"` 的 iframe 渲染（脚本跑在
+  不透明源里，无法碰面板或父页面）；支持后退/前进/刷新导航历史；非 HTML 内容类型
+  拒绝并提示（图片/PDF/纯文本等请使用「目录」预览）；**内置 Eruda 调试面板**
+  （Console / Elements / Network / Resources / Sources / Info），接近 Chrome DevTools
+  体验，页面加载后右下角出现浮球，点击展开面板。
+- **终端 tab**：真 PTY 交互式终端——宿主半用 **node-pty** 起登录 shell（`$SHELL`，
+  缺省 zsh/bash；TERM=xterm-256color），客户端半内嵌 **xterm.js v6**（esbuild 内联，
+  含 fit addon），经 `/workbench/terminal/ws` WebSocket 双向流收发。**多终端同时运行**：
+  「+」→ 终端可开任意多个标签（标签自动编号「终端 / 终端 2 / …」），每个标签是独立
+  PTY 会话，进程在宿主常驻——所有标签常驻挂载，切换标签只切显隐，后台终端继续跑、
+  滚动回看不丢。工作目录取面板顶部路径框（缺省跟随会话 cwd）；面板拖宽/窗口缩放
+  自动 fit 并同步 PTY 尺寸。**连接韧性**：断线指数退避自动重连；宿主为每个会话保留
+  最近 ~256KB 输出环形缓冲，切回/重连/刷新后回放近期内容；页面刷新在 60s 孤儿宽限内
+  重连同会话（标签名经 localStorage 恢复）。进程退出/会话消失显示覆盖层，一键重新
+  启动；关闭标签即杀对应会话（SIGTERM→SIGKILL 升级）。**安全**：shell 固定为用户
+  登录 shell（不接受任意命令）；子进程 env 剔除凭据形（KEY/PASSWORD/SECRET/TOKEN）
+  与 DSH_* 变量；WS 升级拒绝异源 Origin（防跨站 WebSocket 劫持）；会话上限 8 个。
+- **任务看板 tab**：五列看板（待规划 / 待办 / 进行中 / 已完成 / 已失败）+ 搜索 +
+  归档视图。任务可钉住工作区、agent 预设与权限预设（read-only / workspace-write /
+  danger-full-access）。点「执行」由 **Host 新建独立 DSH 会话**真实执行任务 Prompt，
+  会话 `turn/end` 后状态自动回写（成功→已完成、错误→已失败），执行记录可一键跳回
+  执行会话复盘。**Host cron 定时**：5 段 cron（分 时 日 月 周，Host 本地时区，支持
+  `*`/`*/n`/范围/逗号列表、周日 0/7、标准日/周 OR 语义），**关闭浏览器后 Host 仍到点
+  执行并结算**；错过的触发点（Host 停止/睡眠）跳过不补跑；同一任务运行中不并发。
+  任务/计划/执行记录存 **Host 权威账本**（`$DSH_HOME/dsh-work/taskboard-ledger.json`，
+  原子写 + revision + 最近 256 条请求指纹幂等 + 目录锁），浏览器只是异步视图：动作
+  只有经 Host 确认才成为 UI 状态；刷新/重启后数据仍在；损坏账本改名隔离不覆盖；
+  重启对账——已有会话 id 的运行中执行继续观察，没有会话 id 的启动中断取消不重发。
+  打开看板标签时面板自动加宽到 60% 视口（可再拖）。执行消耗与普通 DSH 会话相同的
+  API 额度。核心逻辑（cron/状态机/账本/运行器/UI 结构）移植自
+  [dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui) 的 `packages/dsh-task-board`
+  （Apache-2.0，署名见 NOTICE）；移植裁剪：去掉空闲睡眠保护、v1 迁移导入、受信反代
+  token 与 SSE（改 5s 轮询 + 动作后即时刷新）。
 
 预览与编辑的宿主路由见下方结构；**改源码后先 `pnpm build`** 再生效：宿主半改动需重启
 dsh web（路由在进程启动时注册），客户端半改动刷新页面即可。
@@ -62,15 +98,33 @@ dsh web（路由在进程启动时注册），客户端半改动刷新页面即�
 
 ```
 src/index.js    宿主半入口：name/inject/apply + 路由装配，re-export 纯函数
-src/routes.js   13 条 /workbench/* 路由注册（GET/POST + CSRF 415 围栏）
+src/routes.js   18 条 /workbench/* 路由 + 1 条 WebSocket 升级路由（GET/POST + CSRF 415 围栏 + Origin 围栏）
 src/git.js      git 事实采集与操作（runGit / inspect / init / ignore / …）
 src/files.js    目录/文件操作与分类（listDir / filePreview / writeFileAtomic / …）
+src/browser.js  浏览器沙箱代理（URL 抓取 + HTML 链接重写 + 内容类型校验 + Eruda 调试面板注入）
+src/terminal.js 终端会话管理（node-pty 惰性加载 / 环形输出缓冲 / 孤儿回收 / env 剔除）
 src/validate.js 入参校验与请求体读取
+src/taskboard/  任务看板宿主半（移植自 dsh-web-ui/dsh-task-board，Apache-2.0）
+  schedule.js    5 段 cron 解析与下次触发（纯函数）
+  domain.js      任务状态机与用例（create/update/delete/archive/schedule/settle）
+  ledger.js      Host 权威账本（原子持久化 / 幂等 / 目录锁 / 损坏隔离 / 重启对账）
+  runner.js      真实 DSH 会话执行与 turn/end 结算观察
+  service.js     服务编排（30s cron tick / 5s 会话轮询 / 动作入口）
+  protocol.js    动作信封严格判别联合校验
+  routes.js      /workbench/taskboard/{state,action,options} 路由
+  parse.js / dsh-home.js  账本解析修复 / DSH_HOME 解析
 src/client/     客户端半源码（按功能拆分）
   index.js       入口：shell.overlay 注册（id: workbench）+ apply + 样式注入
-  panel.js       WorkbenchPanel（面板本体）+ 三列联动（dock coupling）
+  features.js    功能注册表（id/label/icon/组件/单实例/可关闭）
+   panel.js       WorkbenchPanel（多实例标签页 + 功能网格首页 + 终端恢复/持久化）+ 三列联动
+   files-panel.js FilesPanel（自包含目录树 + 文件预览分栏）
+   git-panel.js   GitPanel（Git 面板包装）
+   feature-grid.js FeatureGrid（功能网格首页）
+   terminal-panel.js TerminalPanel（xterm.js + WebSocket + 重连/重启覆盖层）
+   taskboard/     任务看板客户端半（panel 五列看板 / detail 详情 / new-task 新建与确认 / api / format）
   preview.js     FilePreview（文本/图片/音视频/markdown/html 预览 + 编辑保存）
   git-view.js    GitView（分支 / 提交图 / 变更 / 提交框）
+  browser-view.js BrowserView（URL 栏 + 导航按钮 + 沙箱 iframe）
   files-view.js  FilesView（目录树）
   highlight.js   无依赖语法高亮（正则 tokenizer）
   markdown.js    marked 渲染 + 安全覆写
@@ -84,6 +138,9 @@ cordis.patch.yml  自带组合层：插入 dsh-work 行
 build.mjs       esbuild 双产物构建脚本
 test/classify.test.mjs  纯逻辑断言（文件分类 / MIME 映射 / 文本判定 / 写内容校验）
 test/preview.test.mjs  纯逻辑断言（高亮 token / marked 渲染 / html 预览重写 / 编辑语言映射）
+test/panel.test.mjs     纯逻辑断言（两段式收起决策 / 缓动求解器）
+test/terminal.test.mjs  终端纯逻辑（环形缓冲 / 尺寸钳制 / env 剔除）+ 真 PTY/WS 集成
+test/taskboard.test.mjs 任务看板纯逻辑（cron / 状态机 / 动作校验 / 账本持久化与锁）
 ```
 
 ## 路由
@@ -100,11 +157,37 @@ test/preview.test.mjs  纯逻辑断言（高亮 token / marked 渲染 / html 预
   编辑器）中打开文件（body: `{path}`），返回 `{ ok, error? }`。
 - `GET /workbench/asset?path=<abs>` → 按扩展名输出原始字节（图片/音频/视频/pdf 等
   Content-Type），支持单区间 Range（206），供 `<img>/<audio>/<video>` 直连。
+- `GET /workbench/browser?url=<abs-url>` → 沙箱浏览器代理：抓取 http(s) HTML 页面、
+  注入 `<base href>` 让资源从源站加载、把所有 `<a href>` 重写回本代理（保持导航受控），
+  以 `text/html` 直接输出供 iframe 渲染。非 HTML 内容类型拒绝并返回友好错误页。
+  仅接受 http/https 协议。
+- `POST /workbench/terminal/create` → 新建 PTY 会话（body: `{cwd, cols?, rows?}`，
+  cwd 必须为已存在目录）：`{ ok, id, pid, shell, cwd, cols, rows, running }`。
+  shell 固定宿主 `$SHELL`（缺省平台缺省），登录 shell 启动；尺寸钳制 2–500 列 ×
+  2–300 行；会话上限 8 个；node-pty 不可用时回 `{ok:false, error}`。
+- `GET /workbench/terminal/list` → `{ ok, sessions:[{id, pid, shell, cwd, cols, rows,
+  running, exitCode?, exitSignal?, subscribers, createdAt}] }`（退出会话信息保留 10s）。
+- `POST /workbench/terminal/kill` → 杀会话（幂等，body: `{id}`）：SIGTERM→1.2s→SIGKILL。
+- `WS /workbench/terminal/ws?id=<session>` → 每会话双向流（`ws` 库，noServer 挂在
+  webServer 升级路由上）：客户端 `{t:'i',d}` 输入 / `{t:'b',d}` base64 二进制输入 /
+  `{t:'r',cols,rows}` 缩放；服务端 `{t:'o',d}` 输出（attach 时先回放最近 ~256KB
+  环形缓冲）/ `{t:'exit',code,signal}`。异源 Origin 拒绝（403，防 CSWSH）；未知会话
+  404；最后一个订阅者断开后 60s 孤儿宽限，无人重连自动杀会话。
+  POST 路由只接受 `application/json`（415 围栏）。
 - `GET /workbench/git?cwd=<abs>[&ignored=1]` → 仓库事实（分支/HEAD/提交图/变更/忽略）。
 - `POST /workbench/git/{init,stage,unstage,stage-all,commit,ignore,unignore}?cwd=<abs>`
   → 变更操作，成功返回最新仓库事实（与 GET 同构），客户端直接消费该响应
   刷新面板（一次往返，不再额外重查）。POST 只接受 `application/json`
   （415 围栏，防跨站简单 POST）。
+- `GET /workbench/taskboard/state` → 任务看板完整 snapshot（revision + tasks +
+  scheduler：时区/lastTickAt/错误）。
+- `POST /workbench/taskboard/action` → 幂等动作（body: `{requestId, action}`，
+  JSON ≤64KiB）：create/update/delete/move/archive/restore/set-schedule/run/rerun；
+  动作走严格判别联合校验（无命令/可执行路径/shell 文本字段），requestId 重放返回
+  当前状态、同 id 异动作拒绝；成功返回应用后的完整 snapshot。run/rerun/set-schedule
+  触发 Host 真实会话执行与 cron 武装。
+- `GET /workbench/taskboard/options` → 执行目标选项：workspaces（id+标题）、
+  agent 预设（id/名称/broken/默认标记）、权限预设枚举，供看板选择器。
 
 ## 安装（已完成则跳过）
 
@@ -151,3 +234,24 @@ pnpm test   # 先构建再断言：文件分类 / MIME 映射 / 文本-二进制
   脚注不支持）；相对路径图片只放行同目录与子目录（拒绝 `..`），链接仅 http(s)/mailto。
 - html 预览为沙箱 iframe：相对资源走 asset 路由可加载，但脚本运行在无同源权限的
   不透明源里（无法访问应用数据），且 `<iframe>` 嵌套页面不会重写其内部资源。
+- 浏览器沙箱仅抓取 text/html 内容（图片/PDF/纯文本等拒绝）；iframe 内链接经代理
+  重写保持导航受控，但 iframe 内部导航（如 JS 跳转、表单提交）不在面板历史记录中；
+  页面脚本运行在沙箱不透明源里，其同源请求（fetch/XHR）遵循正常 CORS 规则。
+- 调试面板基于 Eruda v3（MIT，CDN 加载），沙箱 iframe 内运行；面板 DOM/Network 等
+  操作对象为 iframe 自身，不影响父页面；Eruda 部分依赖 localStorage 的设置项在
+  不透明源下可能不持久化（不影响核心调试功能）。
+- 终端信任级别与其余 `/workbench/*` 路由一致：拿到会话即等于拿到宿主 shell
+  （本机可信环境前提同上，⚠️ 部署警告同样适用）；WS 升级另有同源 Origin 围栏。
+- 终端会话上限 8 个；孤儿会话（无任何连接）60s 后回收，页面刷新须在此窗口内
+  恢复；退出会话信息只保留 10s。环形缓冲仅最近 ~256KB：超长离屏历史回放不全
+  （xterm 自身的 scrollback 在页面刷新后同样从零开始，靠缓冲回放补齐近期内容）。
+- 终端子进程 env 剔除凭据形（KEY/PASSWORD/SECRET/TOKEN）与 DSH_* 变量；需要
+  这些变量的命令请在终端内自行 export。shell 固定为用户登录 shell，不支持指定
+  任意程序；Windows 走 conpty（node-pty），未做专项验证。
+- node-pty 为原生模块（npm 安装时用平台 prebuilds，无需编译）；加载失败不影响
+  插件其余功能，仅创建终端时回错误提示。
+- 任务看板：Host 停止/系统睡眠期间错过的 cron 触发点跳过，绝不补跑；同一任务
+  运行中时到期触发只滚动 nextRunAt，不并发不排队；执行消耗与普通 DSH 会话相同
+  的 API 额度；账本目录锁同一时间只允许一个 Host 进程持有（第二个失败关闭）。
+  与上游 `dsh-task-board` 插件账本路径/路由均隔离，可共存但数据不互通（不建议同装）。
+  看板路由信任级别与其余 `/workbench/*` 一致（⚠️ 部署警告同样适用）。

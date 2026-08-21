@@ -31,6 +31,11 @@ const h = React.createElement
 			h("path", { d: "M20 4v4h-4" }),
 		);
 		export const closeIcon = () => h(IconFrame, null, h("path", { d: "M6 6l12 12M18 6L6 18" }));
+		export const kanbanIcon = () => h(IconFrame, { size: 15 },
+			h("rect", { x: "3", y: "4", width: "5", height: "13", rx: "1" }),
+			h("rect", { x: "9.5", y: "4", width: "5", height: "16", rx: "1" }),
+			h("rect", { x: "16", y: "4", width: "5", height: "9", rx: "1" }),
+		);
 		export const plusIcon = () => h(IconFrame, { size: 12 }, h("path", { d: "M12 5v14M5 12h14" }));
 		export const minusIcon = () => h(IconFrame, { size: 12 }, h("path", { d: "M5 12h14" }));
 		export const trayDownIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M12 4v10M8 10l4 4 4-4M4 19h16" }));
@@ -74,6 +79,18 @@ const h = React.createElement
 			h("path", { d: "M12 7v6M9 10h6" }),
 		);
 		export const chevronIcon = () => h(IconFrame, { size: 10 }, h("path", { d: "M9 6l6 6-6 6" }));
+export const backIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M14 4l-7 8 7 8" }), h("path", { d: "M7 12h12" }));
+export const forwardIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M10 4l7 8-7 8" }), h("path", { d: "M17 12H5" }));
+export const browserIcon = () => h(IconFrame, { size: 14 },
+  h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }),
+  h("path", { d: "M3 8h18" }),
+  h("circle", { cx: "6", cy: "5.5", r: "0.8", fill: "currentColor" }),
+);
+// 终端图标：命令行提示符（>_）。
+export const terminalIcon = () => h(IconFrame, { size: 14 },
+  h("path", { d: "M4 5l4 4-4 4" }),
+  h("path", { d: "M10 13h7" }),
+);
 		export const folderClosedIcon = () => h(IconFrame, { size: 14 }, h("path", { d: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }));
 		export const folderOpenIcon = () => h(IconFrame, { size: 14 },
 			h("path", { d: "M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1H6.4a2 2 0 0 0-1.9 1.4L3 15z" }),

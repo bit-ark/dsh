@@ -4,19 +4,25 @@
  * banner/footer 包成 window.__ModuleLoader__.load({ id, factory }) 工厂。
  */
 import cssText from './styles.css'
+import React from 'react'
 import { WorkbenchPanel, installDockCoupling } from './panel.js'
 
 export const name = 'dsh-work'
-export const inject = ['slots']
+export const inject = ['slots', 'sessions']
 
 export function apply(ctx) {
+  // sessions 服务透传给工作面板：任务看板执行历史「查看会话」用其 open() 跳回
+  // 对应 DSH 会话。用包装组件注入，避免改动 WorkbenchPanel 的标准 props 面。
+  const sessions = ctx.get('sessions')
+  const WorkbenchPanelWithSessions = (props) =>
+    React.createElement(WorkbenchPanel, { ...props, sessions })
   ctx.effect(
     () => ctx.slots.inject('shell.overlay', () => ctx.slots.register({
       name: 'shell.overlay',
       id: 'workbench',
       order: 100,
       label: 'Workbench',
-    }, WorkbenchPanel)),
+    }, WorkbenchPanelWithSessions)),
     'dsh-work: overlay registration',
   );
   // 三列联动（面板宽度 ↔ 对话列宽度），卸载时自动还原。
