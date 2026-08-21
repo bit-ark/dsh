@@ -55,9 +55,7 @@ module.exports = __toCommonJS(index_exports);
 var styles_default = `.dwb-root { position: absolute; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--dsw-alias-bg-layer-2); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: -8px 0 24px rgba(0,0,0,.08); color: var(--dsw-alias-label-primary); font-size: 13px; overflow: hidden; }
 .dwb-header { display: flex; align-items: center; gap: 8px; padding: 12px 28px 0 20px; min-height: 44px; flex: none; box-sizing: border-box; }
 .dwb-title { font-weight: 500; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-primary); flex: none; }
-.dwb-pathinput { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font-size: 11px; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; outline: none; }
-.dwb-pathinput:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.dwb-pathinput:focus { background: var(--dsw-alias-bg-layer-3); border-color: var(--dsw-alias-border-l3); color: var(--dsw-alias-label-primary); }
+.dwb-headerspace { flex: 1; min-width: 0; }
 .dwb-iconbtn { flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; padding: 0; }
 .dwb-iconbtn:hover { background: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent); color: var(--dsw-alias-label-primary); }
 /* \u6807\u7B7E\u680F\u4E0E\u53F3\u4FA7\u5DE5\u4F5C\u53F0\u7684 header \u8981\u6C34\u5E73\u5BF9\u9F50\uFF1A\u4E3B\u5BF9\u8BDD\u5217\u7684 header\uFF08\u4E24\u884C\u5F0F\u6807\u9898+\u6807\u7B7E\uFF0C
@@ -812,7 +810,7 @@ var import_react3 = __toESM(require("react"), 1);
 var h3 = import_react3.default.createElement;
 function FilesView(props) {
   if (props.root === null) {
-    return h3("div", { className: "dwb-scroll" }, h3("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\u4E14\u672A\u624B\u52A8\u6307\u5B9A\u8DEF\u5F84\uFF09"));
+    return h3("div", { className: "dwb-scroll" }, h3("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\uFF09"));
   }
   const rows = [];
   const walk = (node, depth) => {
@@ -14404,7 +14402,7 @@ function FilesPanel(props) {
   }, []);
   const splitMode = selected !== null;
   if (path === void 0) {
-    return h5("div", { className: "dwb-scroll" }, h5("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\u4E14\u672A\u624B\u52A8\u6307\u5B9A\u8DEF\u5F84\uFF09"));
+    return h5("div", { className: "dwb-scroll" }, h5("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\uFF09"));
   }
   if (splitMode) {
     return h5(
@@ -14441,7 +14439,7 @@ var h6 = import_react6.default.createElement;
 function GitView(props) {
   const state = props.state;
   if (state.status === "loading") return h6("div", { className: "dwb-scroll" }, h6("div", { className: "dwb-note" }, "\u52A0\u8F7D\u4E2D\u2026"));
-  if (state.status === "idle") return h6("div", { className: "dwb-scroll" }, h6("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\u4E14\u672A\u624B\u52A8\u6307\u5B9A\u8DEF\u5F84\uFF09"));
+  if (state.status === "idle") return h6("div", { className: "dwb-scroll" }, h6("div", { className: "dwb-note" }, "\u65E0\u5DE5\u4F5C\u76EE\u5F55\uFF08\u672A\u9009\u62E9\u4F1A\u8BDD\uFF09"));
   if (state.status === "error") {
     return h6("div", { className: "dwb-scroll" }, h6(
       "div",
@@ -14465,7 +14463,7 @@ function GitView(props) {
         h6("path", { d: "M18 11.2c0 4-6 3.4-9.4 5" })
       ),
       h6("div", { className: "dwb-emptytitle" }, noGitBinary ? "\u672A\u627E\u5230 git \u547D\u4EE4" : "\u8FD9\u4E2A\u76EE\u5F55\u4E0D\u662F Git \u4ED3\u5E93"),
-      h6("div", { className: "dwb-emptyhint" }, noGitBinary ? "\u8BF7\u5148\u5B89\u88C5 git\uFF0C\u6216\u786E\u8BA4\u5B83\u5728 PATH \u4E2D\uFF0C\u7136\u540E\u70B9\u53F3\u4E0A\u89D2\u5237\u65B0\u3002" : "\u5728\u4E0A\u65B9\u8DEF\u5F84\u6846\u91CC\u8F93\u5165\u4E00\u4E2A Git \u4ED3\u5E93\u7684\u8DEF\u5F84\uFF0C\u5C31\u80FD\u770B\u5230\u5206\u652F\u3001\u63D0\u4EA4\u56FE\u548C\u5DE5\u4F5C\u533A\u53D8\u66F4\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u6B64\u76EE\u5F55\u521D\u59CB\u5316\u4E00\u4E2A\u4ED3\u5E93\u3002"),
+      h6("div", { className: "dwb-emptyhint" }, noGitBinary ? "\u8BF7\u5148\u5B89\u88C5 git\uFF0C\u6216\u786E\u8BA4\u5B83\u5728 PATH \u4E2D\uFF0C\u7136\u540E\u70B9\u53F3\u4E0A\u89D2\u5237\u65B0\u3002" : "\u5207\u6362\u5230\u4E00\u4E2A Git \u4ED3\u5E93\u5185\u7684\u4F1A\u8BDD\uFF0C\u5C31\u80FD\u770B\u5230\u5206\u652F\u3001\u63D0\u4EA4\u56FE\u548C\u5DE5\u4F5C\u533A\u53D8\u66F4\uFF1B\u4E5F\u53EF\u4EE5\u76F4\u63A5\u5728\u6B64\u76EE\u5F55\u521D\u59CB\u5316\u4E00\u4E2A\u4ED3\u5E93\u3002"),
       noGitBinary ? null : h6(TipButton, {
         tip: "\u4E00\u952E\u521B\u5EFA\u4ED3\u5E93\uFF08git init\uFF0C\u9ED8\u8BA4\u5206\u652F\u968F\u5BBF\u4E3B\u673A\u914D\u7F6E\uFF09",
         className: "dwb-initbtn",
@@ -25933,7 +25931,6 @@ function WorkbenchPanel(props) {
   }) : void 0;
   const [open, setOpen] = useState9(false);
   const [refreshing, setRefreshing] = useState9(false);
-  const [pathOverride, setPathOverride] = useState9(void 0);
   const [git, setGit] = useState9({ status: "idle" });
   const [initializing, setInitializing] = useState9(false);
   const [mutating, setMutating] = useState9(false);
@@ -25948,10 +25945,7 @@ function WorkbenchPanel(props) {
   const [resizing, setResizing] = useState9(false);
   const rootRef = useRef7(null);
   const resizeOrigin = useRef7({ x: 0, width });
-  const path = pathOverride !== void 0 ? pathOverride : cwd;
-  useEffect7(() => {
-    setPathOverride(void 0);
-  }, [cwd]);
+  const path = cwd;
   useEffect7(() => {
     setCommitMessage("");
   }, [path]);
@@ -26167,14 +26161,6 @@ function WorkbenchPanel(props) {
       return clampPanelWidth(current, maxWidth);
     });
   }, [maxWidth]);
-  const [pathText, setPathText] = useState9(path || "");
-  useEffect7(() => {
-    setPathText(path || "");
-  }, [path]);
-  const applyPath = () => {
-    const trimmed = pathText.trim();
-    setPathOverride(trimmed.length > 0 && trimmed !== cwd ? trimmed : void 0);
-  };
   const resizeDragMoved = useRef7(false);
   const onResizePointerDown = (event) => {
     event.preventDefault();
@@ -26484,21 +26470,7 @@ function WorkbenchPanel(props) {
         "div",
         { className: "dwb-header" },
         h16("span", { className: "dwb-title" }, "\u5DE5\u4F5C\u9762\u677F"),
-        h16("input", {
-          className: "dwb-pathinput",
-          value: pathText,
-          placeholder: "\u5DE5\u4F5C\u76EE\u5F55\u8DEF\u5F84",
-          title: path || "",
-          spellCheck: false,
-          onChange: (event) => setPathText(event.target.value),
-          onBlur: applyPath,
-          onKeyDown: (event) => {
-            if (event.key === "Enter") {
-              applyPath();
-              event.currentTarget.blur();
-            }
-          }
-        }),
+        h16("span", { className: "dwb-headerspace" }),
         h16(
           TipButton,
           { tip: "\u5237\u65B0", className: "dwb-iconbtn", onClick: refresh, disabled: refreshing },

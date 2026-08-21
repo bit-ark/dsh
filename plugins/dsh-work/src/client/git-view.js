@@ -9,7 +9,7 @@ const h = React.createElement
 		export function GitView(props) {
 			const state = props.state;
 			if (state.status === "loading") return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "加载中…"));
-			if (state.status === "idle") return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话且未手动指定路径）"));
+			if (state.status === "idle") return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话）"));
 			if (state.status === "error") {
 				return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-emptygit" },
 					h("div", { className: "dwb-emptytitle" }, "Git 数据加载失败"),
@@ -29,7 +29,7 @@ const h = React.createElement
 					h("div", { className: "dwb-emptytitle" }, noGitBinary ? "未找到 git 命令" : "这个目录不是 Git 仓库"),
 					h("div", { className: "dwb-emptyhint" }, noGitBinary
 						? "请先安装 git，或确认它在 PATH 中，然后点右上角刷新。"
-						: "在上方路径框里输入一个 Git 仓库的路径，就能看到分支、提交图和工作区变更；也可以直接在此目录初始化一个仓库。"),
+						: "切换到一个 Git 仓库内的会话，就能看到分支、提交图和工作区变更；也可以直接在此目录初始化一个仓库。"),
 					noGitBinary
 						? null
 						: h(TipButton, {

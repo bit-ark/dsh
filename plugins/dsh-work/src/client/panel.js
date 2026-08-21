@@ -69,7 +69,6 @@ export function WorkbenchPanel(props) {
     : undefined
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [pathOverride, setPathOverride] = useState(undefined)
   const [git, setGit] = useState({ status: "idle" })
   const [initializing, setInitializing] = useState(false)
   const [mutating, setMutating] = useState(false)
@@ -90,8 +89,8 @@ export function WorkbenchPanel(props) {
   const rootRef = useRef(null)
   const resizeOrigin = useRef({ x: 0, width })
 
-  const path = pathOverride !== undefined ? pathOverride : cwd
-  useEffect(() => { setPathOverride(undefined) }, [cwd])
+  // 工作目录 = 当前会话的 cwd（不再提供手动路径输入）。
+  const path = cwd
   useEffect(() => { setCommitMessage("") }, [path])
 
   // ── 标签管理 ──
@@ -326,14 +325,6 @@ export function WorkbenchPanel(props) {
       return clampPanelWidth(current, maxWidth)
     })
   }, [maxWidth])
-
-  const [pathText, setPathText] = useState(path || "")
-  useEffect(() => { setPathText(path || "") }, [path])
-
-  const applyPath = () => {
-    const trimmed = pathText.trim()
-    setPathOverride(trimmed.length > 0 && trimmed !== cwd ? trimmed : undefined)
-  }
 
   // ── panel resize drag (left edge) ────────────────────────────────
   const resizeDragMoved = useRef(false)
@@ -639,18 +630,7 @@ export function WorkbenchPanel(props) {
     },
       h("div", { className: "dwb-header" },
         h("span", { className: "dwb-title" }, "工作面板"),
-        h("input", {
-          className: "dwb-pathinput",
-          value: pathText,
-          placeholder: "工作目录路径",
-          title: path || "",
-          spellCheck: false,
-          onChange: (event) => setPathText(event.target.value),
-          onBlur: applyPath,
-          onKeyDown: (event) => {
-            if (event.key === "Enter") { applyPath(); event.currentTarget.blur() }
-          },
-        }),
+        h("span", { className: "dwb-headerspace" }),
         h(TipButton, { tip: "刷新", className: "dwb-iconbtn", onClick: refresh, disabled: refreshing },
           h("span", { className: refreshing ? "dwb-spin" : undefined }, refreshIcon())),
         h(TipButton, { tip: "收起（再次点击关闭）", className: "dwb-iconbtn", onClick: collapseOrHide }, closeIcon()),

@@ -7,7 +7,7 @@ const h = React.createElement
 		// ── Files tab ────────────────────────────────────────────────────────
 		export function FilesView(props) {
 			if (props.root === null) {
-				return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话且未手动指定路径）"));
+				return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话）"));
 			}
 			const rows = [];
 			const walk = (node, depth) => {

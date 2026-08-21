@@ -83,7 +83,7 @@ export function FilesPanel(props) {
   const splitMode = selected !== null
 
   if (path === undefined) {
-    return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话且未手动指定路径）"))
+    return h("div", { className: "dwb-scroll" }, h("div", { className: "dwb-note" }, "无工作目录（未选择会话）"))
   }
 
   if (splitMode) {
