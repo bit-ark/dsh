@@ -67,6 +67,7 @@ import { registerRoutes } from './routes.js'
 import { TaskboardHostService } from './taskboard/service.js'
 import { registerTaskboardRoutes } from './taskboard/routes.js'
 
+/** 插件 id（与 client 半一致，Cordis 插件契约）。 */
 export const name = 'dsh-work'
 
 /**
@@ -79,6 +80,9 @@ export const name = 'dsh-work'
  */
 export const inject = ['webServer', 'apiProxy']
 
+/**
+ * 宿主半入口：注册 /workbench/* 路由与任务看板服务。
+ */
 export function apply(ctx) {
   ctx.effect(() => registerRoutes(ctx), 'dsh-work-git: routes')
   // 任务看板（Host 权威账本 + 真实会话执行 + cron 调度）。

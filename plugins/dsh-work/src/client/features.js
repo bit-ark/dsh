@@ -14,6 +14,7 @@ import { TaskboardPanel } from './taskboard/panel.js'
 import { branchIcon, browserIcon, folderIcon, terminalIcon, kanbanIcon } from './icons.js'
 const h = React.createElement
 
+/** 面板可用功能注册表：id/label/description/icon/组件/单实例/可关闭。 */
 export const FEATURES = [
   {
     id: 'files',
@@ -64,6 +65,7 @@ export const FEATURES = [
 
 const FEATURE_MAP = new Map(FEATURES.map((f) => [f.id, f]))
 
+/** 按功能 id 查注册项（未注册返回 undefined）。 */
 export function getFeature(id) {
   return FEATURE_MAP.get(id)
 }

@@ -23,6 +23,7 @@ import {
   canMoveManually, settleExecution, startExecution, withStatus,
 } from './domain.js'
 
+/** 账本文件 schema 版本（不匹配时走损坏隔离，不静默升级）。 */
 export const TASKBOARD_SCHEMA_VERSION = 2
 
 const MAX_REQUEST_CACHE = 256
@@ -188,6 +189,12 @@ function parseHostTasks(values) {
   })
 }
 
+/**
+ * Host 权威任务账本。
+ *
+ * 全部变更走 #apply 动作执行 + 原子持久化（fsync + 目录锁 + 损坏隔离）；
+ * 重启时对账中断的 execution 并修复过期调度。变更通过事件通知监听方。
+ */
 export class TaskboardLedger {
   #document
   #listeners = new Set()

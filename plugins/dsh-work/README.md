@@ -98,7 +98,8 @@ dsh web（路由在进程启动时注册），客户端半改动刷新页面即�
 
 ```
 src/index.js    宿主半入口：name/inject/apply + 路由装配，re-export 纯函数
-src/routes.js   18 条 /workbench/* 路由 + 1 条 WebSocket 升级路由（GET/POST + CSRF 415 围栏 + Origin 围栏）
+src/routes.js   路由装配层：把 /workbench/* 各功能路由注册到 webServer 并聚合卸载
+src/routes/     路由按功能拆分的模块（shared 响应 helper / git / files / browser / terminal）
 src/git.js      git 事实采集与操作（runGit / inspect / init / ignore / …）
 src/files.js    目录/文件操作与分类（listDir / filePreview / writeFileAtomic / …）
 src/browser.js  浏览器沙箱代理（URL 抓取 + HTML 链接重写 + 内容类型校验 + Eruda 调试面板注入）
@@ -116,7 +117,11 @@ src/taskboard/  任务看板宿主半（移植自 dsh-web-ui/dsh-task-board，Ap
 src/client/     客户端半源码（按功能拆分）
   index.js       入口：shell.overlay 注册（id: workbench）+ apply + 样式注入
   features.js    功能注册表（id/label/icon/组件/单实例/可关闭）
-   panel.js       WorkbenchPanel（多实例标签页 + 功能网格首页 + 终端恢复/持久化）+ 三列联动
+   panel.js       WorkbenchPanel 组装与渲染 + 三列联动（installDockCoupling）
+   panel-geometry.js  面板几何 hook（宽度/展开/动画/拖拽/自动加宽/持久化）
+   panel-tabs.js      标签系统 hook（打开/关闭/改名/终端恢复与持久化）
+   panel-git.js       Git 状态 hook（快照拉取/刷新 + init/stage/commit/ignore 操作）
+   panel-tree.js      目录树 hook（惰性展开/折叠/整树刷新）
    files-panel.js FilesPanel（自包含目录树 + 文件预览分栏）
    git-panel.js   GitPanel（Git 面板包装）
    feature-grid.js FeatureGrid（功能网格首页）

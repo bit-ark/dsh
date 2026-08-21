@@ -13,6 +13,7 @@ import { closeIcon } from './icons.js'
 const h = React.createElement
 const { useState, useRef, useEffect, useCallback } = React
 
+/** 文件面板：目录树 + 预览分栏（WorkbenchPanel 注入 root/onToggle/path/width）。 */
 export function FilesPanel(props) {
   const { refreshing, root, onToggle, path, width } = props
   const [selected, setSelected] = useState(null)

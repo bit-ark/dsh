@@ -234,13 +234,6 @@
 .dwb-browser-emptyicon { font-size: 28px; opacity: .7; }
 .dwb-browser-emptytitle { font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
 .dwb-browser-emptyhint { font-size: 12px; line-height: 1.6; max-width: 260px; }
-/* ── browser: Playwright screenshot mode ── */
-.dwb-browser-screenshot-wrap { flex: 1; min-height: 0; position: relative; overflow: auto; outline: none; cursor: crosshair; background: var(--dsw-alias-bg-layer-1); }
-.dwb-browser-screenshot { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
-.dwb-browser-interlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 1; }
-.dwb-browser-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 36px 20px; text-align: center; color: var(--dsw-alias-label-tertiary); }
-.dwb-browser-error-title { font-size: 13px; font-weight: 500; color: var(--dsw-alias-state-error-primary); }
-.dwb-browser-error-msg { font-size: 12px; line-height: 1.6; max-width: 260px; word-break: break-word; }
 /* ── browser: safe mode button + status bar + messages ── */
 .dwb-browser-safe-on { color: var(--dsw-alias-state-success-primary) !important; }
 .dwb-browser-safe-on:hover { background: var(--dsw-alias-state-success-tertiary) !important; }

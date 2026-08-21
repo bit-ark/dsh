@@ -14,6 +14,11 @@ const SESSION_POLL_MS = 5_000
 const SCHEDULE_TICK_MS = 30_000
 const RESUME_GAP_MS = SCHEDULE_TICK_MS + 15_000
 
+/**
+ * 任务看板宿主服务：30s cron tick + 5s 会话轮询 + 动作入口。
+ *
+ * 持有账本与运行器，向路由层暴露动作 API；卸载时停止全部定时器。
+ */
 export class TaskboardHostService {
   #listeners = new Set()
   #timers = []

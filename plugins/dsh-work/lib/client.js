@@ -288,13 +288,6 @@ var styles_default = `.dwb-root { position: absolute; top: 0; right: 0; bottom: 
 .dwb-browser-emptyicon { font-size: 28px; opacity: .7; }
 .dwb-browser-emptytitle { font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
 .dwb-browser-emptyhint { font-size: 12px; line-height: 1.6; max-width: 260px; }
-/* \u2500\u2500 browser: Playwright screenshot mode \u2500\u2500 */
-.dwb-browser-screenshot-wrap { flex: 1; min-height: 0; position: relative; overflow: auto; outline: none; cursor: crosshair; background: var(--dsw-alias-bg-layer-1); }
-.dwb-browser-screenshot { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
-.dwb-browser-interlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 1; }
-.dwb-browser-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 36px 20px; text-align: center; color: var(--dsw-alias-label-tertiary); }
-.dwb-browser-error-title { font-size: 13px; font-weight: 500; color: var(--dsw-alias-state-error-primary); }
-.dwb-browser-error-msg { font-size: 12px; line-height: 1.6; max-width: 260px; word-break: break-word; }
 /* \u2500\u2500 browser: safe mode button + status bar + messages \u2500\u2500 */
 .dwb-browser-safe-on { color: var(--dsw-alias-state-success-primary) !important; }
 .dwb-browser-safe-on:hover { background: var(--dsw-alias-state-success-tertiary) !important; }
@@ -417,10 +410,10 @@ textarea.dwb-tb-input { resize: vertical; line-height: 1.5; }
 `;
 
 // src/client/index.js
-var import_react16 = __toESM(require("react"), 1);
+var import_react20 = __toESM(require("react"), 1);
 
 // src/client/panel.js
-var import_react15 = __toESM(require("react"), 1);
+var import_react19 = __toESM(require("react"), 1);
 
 // src/client/tip.js
 var import_react = __toESM(require("react"), 1);
@@ -25907,153 +25900,21 @@ function FeatureGrid(props) {
   );
 }
 
-// src/client/panel.js
-var h16 = import_react15.default.createElement;
-var { useState: useState9, useEffect: useEffect7, useCallback: useCallback4, useRef: useRef7 } = import_react15.default;
-var INITIAL_TABS = [];
-var tabIdCounter = 0;
-var TERMINAL_LABELS_KEY = "dsh-work.terminal-labels";
-function readTerminalLabels() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(TERMINAL_LABELS_KEY) ?? "{}");
-    return parsed !== null && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function writeTerminalLabels(labels) {
-  try {
-    window.localStorage.setItem(TERMINAL_LABELS_KEY, JSON.stringify(labels));
-  } catch {
-  }
-}
-function killTerminalSession(sessionId) {
-  try {
-    void fetch("/workbench/terminal/kill", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: sessionId })
-    }).catch(() => {
-    });
-  } catch {
-  }
-}
-function nextTerminalLabel(list) {
-  const n = list.filter((t) => t.featureId === "terminal").length;
-  return n === 0 ? "\u7EC8\u7AEF" : `\u7EC8\u7AEF ${n + 1}`;
-}
-function WorkbenchPanel(props) {
-  const useSessions = props.useSessions;
-  const cwd = typeof useSessions === "function" ? useSessions((list) => {
-    if (list.current === void 0) return void 0;
-    const row = list.byId[list.current];
-    return row === void 0 ? void 0 : row.cwd;
-  }) : void 0;
+// src/client/panel-geometry.js
+var import_react15 = __toESM(require("react"), 1);
+var { useState: useState9, useEffect: useEffect7, useRef: useRef7 } = import_react15.default;
+function usePanelGeometry() {
   const [open, setOpen] = useState9(false);
-  const [refreshing, setRefreshing] = useState9(false);
-  const [git, setGit] = useState9({ status: "idle" });
-  const [initializing, setInitializing] = useState9(false);
-  const [mutating, setMutating] = useState9(false);
-  const [actionError, setActionError] = useState9(void 0);
-  const [commitMessage, setCommitMessage] = useState9("");
-  const [showIgnored, setShowIgnored] = useState9(false);
-  const [root, setRoot] = useState9(null);
-  const [tabs, setTabs] = useState9(INITIAL_TABS);
-  const [activeTabId, setActiveTabId] = useState9(null);
   const [width, setWidth] = useState9(() => Math.max(PANEL_MIN, readStored(WIDTH_KEY, PANEL_DEFAULT)));
   const [maxWidth, setMaxWidth] = useState9(() => window.innerWidth - PANEL_MIN);
   const [resizing, setResizing] = useState9(false);
   const rootRef = useRef7(null);
   const resizeOrigin = useRef7({ x: 0, width });
-  const path = cwd;
-  useEffect7(() => {
-    setCommitMessage("");
-  }, [path]);
   const widenForTaskboard = () => {
     const desired = Math.round(Math.min(Math.max(window.innerWidth * 0.6, AUTO_WIDEN), window.innerWidth * 0.85));
     const target = clampPanelWidth(desired, maxWidthRef.current, PANEL_MIN);
     if (target > widthRef.current + 2) animateWidthTo(target, { floor: PANEL_MIN, persist: true });
   };
-  const openFeature = useCallback4((featureId, opts) => {
-    const feat = getFeature(featureId);
-    if (!feat || feat.disabled) return;
-    if (featureId === "taskboard") widenForTaskboard();
-    if (feat.singleInstance) {
-      const existing = tabs.find((t) => t.featureId === featureId);
-      if (existing) {
-        setActiveTabId(existing.id);
-        return;
-      }
-    }
-    tabIdCounter += 1;
-    const id = `${featureId}-${tabIdCounter}-${Date.now()}`;
-    const label = featureId === "terminal" ? nextTerminalLabel(tabs) : feat.label;
-    const tab = { id, featureId, label, closable: feat.closable === true };
-    if (featureId === "terminal" && opts !== void 0 && typeof opts.sessionId === "string") {
-      tab.sessionId = opts.sessionId;
-    }
-    setTabs((prev) => [...prev, tab]);
-    setActiveTabId(id);
-  }, [tabs]);
-  const closeTab = useCallback4((tabId) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab?.closable) return;
-    if (tab.featureId === "terminal" && typeof tab.sessionId === "string") {
-      killTerminalSession(tab.sessionId);
-    }
-    const next = tabs.filter((t) => t.id !== tabId);
-    setTabs(next);
-    setActiveTabId((current) => {
-      if (current !== tabId) return current;
-      return next.length > 0 ? next[next.length - 1].id : null;
-    });
-  }, [tabs]);
-  const updateTabLabel = useCallback4((tabId, label) => {
-    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, label } : t));
-  }, []);
-  const bindTabSession = useCallback4((tabId, sessionId) => {
-    setTabs((prev) => prev.map((t) => t.id === tabId && t.sessionId !== sessionId ? { ...t, sessionId } : t));
-  }, []);
-  const terminalRestoredRef = useRef7(false);
-  useEffect7(() => {
-    if (terminalRestoredRef.current) return;
-    terminalRestoredRef.current = true;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const response = await fetch("/workbench/terminal/list", { signal: controller.signal });
-        const body = await response.json();
-        if (body.ok !== true || !Array.isArray(body.sessions)) return;
-        const running = body.sessions.filter((s15) => s15.running === true);
-        if (running.length === 0) return;
-        const labels = readTerminalLabels();
-        setTabs((prev) => {
-          let next = prev;
-          for (const session of running) {
-            if (next.some((t) => t.featureId === "terminal" && t.sessionId === session.id)) continue;
-            tabIdCounter += 1;
-            next = [...next, {
-              id: `terminal-${tabIdCounter}-${session.id}`,
-              featureId: "terminal",
-              label: typeof labels[session.id] === "string" && labels[session.id] !== "" ? labels[session.id] : nextTerminalLabel(next),
-              closable: true,
-              sessionId: session.id
-            }];
-          }
-          return next;
-        });
-      } catch {
-      }
-    })();
-    return () => controller.abort();
-  }, []);
-  useEffect7(() => {
-    const labels = {};
-    for (const t of tabs) {
-      if (t.featureId === "terminal" && typeof t.sessionId === "string") labels[t.sessionId] = t.label;
-    }
-    writeTerminalLabels(labels);
-  }, [tabs]);
   const writeTimerRef = useRef7(null);
   const debouncedWrite = (key, value) => {
     if (writeTimerRef.current !== null) clearTimeout(writeTimerRef.current);
@@ -26213,6 +26074,154 @@ function WorkbenchPanel(props) {
     stopTween();
     animateWidthTo(clampPanelWidth(PANEL_DEFAULT, maxWidthRef.current), { floor: PANEL_MIN, persist: true });
   };
+  return {
+    open,
+    setOpen,
+    width,
+    maxWidth,
+    resizing,
+    rootRef,
+    widenForTaskboard,
+    animateWidthTo,
+    collapseOrHide,
+    openPanel,
+    onResizePointerDown,
+    onResizePointerMove,
+    onResizePointerUp,
+    onResizeDoubleClick
+  };
+}
+
+// src/client/panel-tabs.js
+var import_react16 = __toESM(require("react"), 1);
+var { useState: useState10, useEffect: useEffect8, useCallback: useCallback4, useRef: useRef8 } = import_react16.default;
+var INITIAL_TABS = [];
+var tabIdCounter = 0;
+var TERMINAL_LABELS_KEY = "dsh-work.terminal-labels";
+function readTerminalLabels() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TERMINAL_LABELS_KEY) ?? "{}");
+    return parsed !== null && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function writeTerminalLabels(labels) {
+  try {
+    window.localStorage.setItem(TERMINAL_LABELS_KEY, JSON.stringify(labels));
+  } catch {
+  }
+}
+function killTerminalSession(sessionId) {
+  try {
+    void fetch("/workbench/terminal/kill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: sessionId })
+    }).catch(() => {
+    });
+  } catch {
+  }
+}
+function nextTerminalLabel(list) {
+  const n = list.filter((t) => t.featureId === "terminal").length;
+  return n === 0 ? "\u7EC8\u7AEF" : `\u7EC8\u7AEF ${n + 1}`;
+}
+function usePanelTabs({ widenForTaskboard }) {
+  const [tabs, setTabs] = useState10(INITIAL_TABS);
+  const [activeTabId, setActiveTabId] = useState10(null);
+  const openFeature = useCallback4((featureId, opts) => {
+    const feat = getFeature(featureId);
+    if (!feat || feat.disabled) return;
+    if (featureId === "taskboard") widenForTaskboard();
+    if (feat.singleInstance) {
+      const existing = tabs.find((t) => t.featureId === featureId);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return;
+      }
+    }
+    tabIdCounter += 1;
+    const id = `${featureId}-${tabIdCounter}-${Date.now()}`;
+    const label = featureId === "terminal" ? nextTerminalLabel(tabs) : feat.label;
+    const tab = { id, featureId, label, closable: feat.closable === true };
+    if (featureId === "terminal" && opts !== void 0 && typeof opts.sessionId === "string") {
+      tab.sessionId = opts.sessionId;
+    }
+    setTabs((prev) => [...prev, tab]);
+    setActiveTabId(id);
+  }, [tabs, widenForTaskboard]);
+  const closeTab = useCallback4((tabId) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.closable) return;
+    if (tab.featureId === "terminal" && typeof tab.sessionId === "string") {
+      killTerminalSession(tab.sessionId);
+    }
+    const next = tabs.filter((t) => t.id !== tabId);
+    setTabs(next);
+    setActiveTabId((current) => {
+      if (current !== tabId) return current;
+      return next.length > 0 ? next[next.length - 1].id : null;
+    });
+  }, [tabs]);
+  const updateTabLabel = useCallback4((tabId, label) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, label } : t));
+  }, []);
+  const bindTabSession = useCallback4((tabId, sessionId) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId && t.sessionId !== sessionId ? { ...t, sessionId } : t));
+  }, []);
+  const terminalRestoredRef = useRef8(false);
+  useEffect8(() => {
+    if (terminalRestoredRef.current) return;
+    terminalRestoredRef.current = true;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/workbench/terminal/list", { signal: controller.signal });
+        const body = await response.json();
+        if (body.ok !== true || !Array.isArray(body.sessions)) return;
+        const running = body.sessions.filter((s15) => s15.running === true);
+        if (running.length === 0) return;
+        const labels = readTerminalLabels();
+        setTabs((prev) => {
+          let next = prev;
+          for (const session of running) {
+            if (next.some((t) => t.featureId === "terminal" && t.sessionId === session.id)) continue;
+            tabIdCounter += 1;
+            next = [...next, {
+              id: `terminal-${tabIdCounter}-${session.id}`,
+              featureId: "terminal",
+              label: typeof labels[session.id] === "string" && labels[session.id] !== "" ? labels[session.id] : nextTerminalLabel(next),
+              closable: true,
+              sessionId: session.id
+            }];
+          }
+          return next;
+        });
+      } catch {
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+  useEffect8(() => {
+    const labels = {};
+    for (const t of tabs) {
+      if (t.featureId === "terminal" && typeof t.sessionId === "string") labels[t.sessionId] = t.label;
+    }
+    writeTerminalLabels(labels);
+  }, [tabs]);
+  return { tabs, activeTabId, setActiveTabId, openFeature, closeTab, updateTabLabel, bindTabSession };
+}
+
+// src/client/panel-git.js
+var import_react17 = __toESM(require("react"), 1);
+var { useState: useState11, useEffect: useEffect9, useCallback: useCallback5 } = import_react17.default;
+function usePanelGit(path, showIgnored) {
+  const [git, setGit] = useState11({ status: "idle" });
+  const [initializing, setInitializing] = useState11(false);
+  const [mutating, setMutating] = useState11(false);
+  const [actionError, setActionError] = useState11(void 0);
+  const [commitMessage, setCommitMessage] = useState11("");
   const applyGitFacts = (body) => {
     if (body.ok !== true) {
       setGit({ status: "error", error: body.error || "git \u67E5\u8BE2\u5931\u8D25" });
@@ -26232,7 +26241,7 @@ function WorkbenchPanel(props) {
       ignored: freshIgnored.length > 0 || prev.status !== "ready" ? freshIgnored : prev.ignored || []
     }));
   };
-  const loadGitState = useCallback4(async (target, signal, withIgnored) => {
+  const loadGitState = useCallback5(async (target, signal, withIgnored) => {
     setGit({ status: "loading" });
     try {
       const options = signal === void 0 ? {} : { signal };
@@ -26249,7 +26258,7 @@ function WorkbenchPanel(props) {
       setGit({ status: "error", error: messageOf(error) });
     }
   }, []);
-  useEffect7(() => {
+  useEffect9(() => {
     if (path === void 0) {
       setGit({ status: "idle" });
       return;
@@ -26258,43 +26267,6 @@ function WorkbenchPanel(props) {
     void loadGitState(path, controller.signal, showIgnored);
     return () => controller.abort();
   }, [path, loadGitState, showIgnored]);
-  const listDir = useCallback4(async (dirPath, signal) => {
-    const options = signal === void 0 ? {} : { signal };
-    const response = await fetch("/workbench/dir?path=" + encodeURIComponent(dirPath), options);
-    return response.json();
-  }, []);
-  useEffect7(() => {
-    if (path === void 0) {
-      setRoot(null);
-      return;
-    }
-    const controller = new AbortController();
-    const base = {
-      path,
-      name: path.split("/").filter((segment) => segment !== "").pop() || path,
-      type: "directory",
-      hidden: false,
-      expanded: true,
-      loading: true,
-      loaded: false,
-      children: []
-    };
-    setRoot(base);
-    listDir(path, controller.signal).then((listing) => {
-      if (controller.signal.aborted) return;
-      if (listing.ok !== true) {
-        setRoot(Object.assign({}, base, { loading: false, error: listing.error || "\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25" }));
-        return;
-      }
-      const next = Object.assign({}, base, { loading: false, loaded: true, children: (listing.entries || []).map(toNode) });
-      if (listing.truncated !== void 0) next.truncated = listing.truncated;
-      setRoot(next);
-    }).catch((error) => {
-      if (controller.signal.aborted) return;
-      setRoot(Object.assign({}, base, { loading: false, error: messageOf(error) }));
-    });
-    return () => controller.abort();
-  }, [path, listDir]);
   const initRepo = async () => {
     if (path === void 0 || initializing) return;
     setInitializing(true);
@@ -26340,6 +26312,62 @@ function WorkbenchPanel(props) {
       setMutating(false);
     }
   };
+  return {
+    git,
+    initializing,
+    mutating,
+    actionError,
+    commitMessage,
+    setCommitMessage,
+    loadGitState,
+    initRepo,
+    mutateGit
+  };
+}
+
+// src/client/panel-tree.js
+var import_react18 = __toESM(require("react"), 1);
+var { useState: useState12, useEffect: useEffect10, useCallback: useCallback6 } = import_react18.default;
+function useDirTree(path) {
+  const [root, setRoot] = useState12(null);
+  const [refreshing, setRefreshing] = useState12(false);
+  const listDir = useCallback6(async (dirPath, signal) => {
+    const options = signal === void 0 ? {} : { signal };
+    const response = await fetch("/workbench/dir?path=" + encodeURIComponent(dirPath), options);
+    return response.json();
+  }, []);
+  useEffect10(() => {
+    if (path === void 0) {
+      setRoot(null);
+      return;
+    }
+    const controller = new AbortController();
+    const base = {
+      path,
+      name: path.split("/").filter((segment) => segment !== "").pop() || path,
+      type: "directory",
+      hidden: false,
+      expanded: true,
+      loading: true,
+      loaded: false,
+      children: []
+    };
+    setRoot(base);
+    listDir(path, controller.signal).then((listing) => {
+      if (controller.signal.aborted) return;
+      if (listing.ok !== true) {
+        setRoot(Object.assign({}, base, { loading: false, error: listing.error || "\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25" }));
+        return;
+      }
+      const next = Object.assign({}, base, { loading: false, loaded: true, children: (listing.entries || []).map(toNode) });
+      if (listing.truncated !== void 0) next.truncated = listing.truncated;
+      setRoot(next);
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      setRoot(Object.assign({}, base, { loading: false, error: messageOf(error) }));
+    });
+    return () => controller.abort();
+  }, [path, listDir]);
   const onToggle = (dirPath) => {
     if (root === null) return;
     const node = findNode(root, dirPath);
@@ -26391,55 +26419,77 @@ function WorkbenchPanel(props) {
       node.children.filter((child) => child.loaded && child.expanded).map((child) => refreshNode(child))
     );
   };
+  return { root, refreshing, setRefreshing, onToggle, refreshNode };
+}
+
+// src/client/panel.js
+var h16 = import_react19.default.createElement;
+var { useState: useState13, useEffect: useEffect11 } = import_react19.default;
+function WorkbenchPanel(props) {
+  const useSessions = props.useSessions;
+  const cwd = typeof useSessions === "function" ? useSessions((list) => {
+    if (list.current === void 0) return void 0;
+    const row = list.byId[list.current];
+    return row === void 0 ? void 0 : row.cwd;
+  }) : void 0;
+  const [showIgnored, setShowIgnored] = useState13(false);
+  const geometry = usePanelGeometry();
+  const tabs = usePanelTabs({ widenForTaskboard: geometry.widenForTaskboard });
+  const git = usePanelGit(cwd, showIgnored);
+  const tree = useDirTree(cwd);
+  const path = cwd;
+  useEffect11(() => {
+    git.setCommitMessage("");
+  }, [path]);
   const refresh = () => {
-    if (refreshing) return;
-    setRefreshing(true);
+    if (tree.refreshing) return;
+    tree.setRefreshing(true);
     const tasks = [];
-    if (root !== null) tasks.push(refreshNode(root));
-    if (path !== void 0) tasks.push(loadGitState(path, void 0, showIgnored));
-    Promise.allSettled(tasks).then(() => setRefreshing(false));
+    if (tree.root !== null) tasks.push(tree.refreshNode(tree.root));
+    if (path !== void 0) tasks.push(git.loadGitState(path, void 0, showIgnored));
+    Promise.allSettled(tasks).then(() => tree.setRefreshing(false));
   };
-  if (!open) {
-    return h16(TipButton, { tip: "\u5C55\u5F00\u5DE5\u4F5C\u9762\u677F", className: "dwb-openbtn", onClick: openPanel }, "\u5DE5\u4F5C\u9762\u677F");
+  if (!geometry.open) {
+    return h16(TipButton, { tip: "\u5C55\u5F00\u5DE5\u4F5C\u9762\u677F", className: "dwb-openbtn", onClick: geometry.openPanel }, "\u5DE5\u4F5C\u9762\u677F");
   }
   const renderTabContent = (tab, isActive) => {
     const feat = getFeature(tab.featureId);
     if (!feat) return null;
     const visible = isActive;
     if (feat.id === "files") {
-      return h16(FilesPanel, { visible, refreshing, root, onToggle, path, width });
+      return h16(FilesPanel, { visible, refreshing: tree.refreshing, root: tree.root, onToggle: tree.onToggle, path, width: geometry.width });
     }
     if (feat.id === "git") {
       return h16(GitPanel, {
         visible,
-        refreshing,
-        state: git,
-        mutating,
-        actionError,
-        onInit: initRepo,
-        initializing,
-        onStage: (p) => void mutateGit("stage", { path: p }),
-        onUnstage: (p) => void mutateGit("unstage", { path: p }),
-        onStageAll: () => void mutateGit("stage-all"),
+        refreshing: tree.refreshing,
+        state: git.git,
+        mutating: git.mutating,
+        actionError: git.actionError,
+        onInit: git.initRepo,
+        initializing: git.initializing,
+        onStage: (p) => void git.mutateGit("stage", { path: p }),
+        onUnstage: (p) => void git.mutateGit("unstage", { path: p }),
+        onStageAll: () => void git.mutateGit("stage-all"),
         onCommit: () => {
-          const message = commitMessage.trim();
+          const message = git.commitMessage.trim();
           if (message === "") return;
-          void mutateGit("commit", { message }).then((ok) => {
-            if (ok) setCommitMessage("");
+          void git.mutateGit("commit", { message }).then((ok) => {
+            if (ok) git.setCommitMessage("");
           });
         },
-        onIgnore: (p) => void mutateGit("ignore", { path: p }),
-        onUnignore: (p) => void mutateGit("unignore", { path: p }),
+        onIgnore: (p) => void git.mutateGit("ignore", { path: p }),
+        onUnignore: (p) => void git.mutateGit("unignore", { path: p }),
         showIgnored,
         onToggleIgnored: () => setShowIgnored((prev) => !prev),
-        commitMessage,
-        setCommitMessage
+        commitMessage: git.commitMessage,
+        setCommitMessage: git.setCommitMessage
       });
     }
     if (feat.id === "browser") {
       return h16(BrowserView, {
         visible,
-        onTitleChange: (label) => updateTabLabel(tab.id, label)
+        onTitleChange: (label) => tabs.updateTabLabel(tab.id, label)
       });
     }
     if (feat.id === "terminal") {
@@ -26447,7 +26497,7 @@ function WorkbenchPanel(props) {
         visible,
         sessionId: tab.sessionId,
         path,
-        onSessionReady: (sessionId) => bindTabSession(tab.id, sessionId)
+        onSessionReady: (sessionId) => tabs.bindTabSession(tab.id, sessionId)
       });
     }
     if (feat.id === "taskboard") {
@@ -26456,25 +26506,25 @@ function WorkbenchPanel(props) {
     return h16(feat.component, { visible });
   };
   return h16(
-    import_react15.default.Fragment,
+    import_react19.default.Fragment,
     null,
     h16(
       "div",
       {
         className: "dwb-resize",
-        "data-dragging": resizing || void 0,
+        "data-dragging": geometry.resizing || void 0,
         title: "\u62D6\u52A8\u8C03\u6574\u5BBD\u5EA6\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09",
-        style: { right: width - 4 + "px" },
-        onPointerDown: onResizePointerDown,
-        onPointerMove: onResizePointerMove,
-        onPointerUp: onResizePointerUp,
-        onDoubleClick: onResizeDoubleClick
+        style: { right: geometry.width - 4 + "px" },
+        onPointerDown: geometry.onResizePointerDown,
+        onPointerMove: geometry.onResizePointerMove,
+        onPointerUp: geometry.onResizePointerUp,
+        onDoubleClick: geometry.onResizeDoubleClick
       },
       h16(
         "div",
         {
           className: "dwb-resize-grip",
-          title: width > PANEL_MIN ? "\u5355\u51FB\u7F29\u81F3\u6700\u7A84\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09" : "\u5355\u51FB\u6536\u8D77\u9762\u677F\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09"
+          title: geometry.width > PANEL_MIN ? "\u5355\u51FB\u7F29\u81F3\u6700\u7A84\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09" : "\u5355\u51FB\u6536\u8D77\u9762\u677F\uFF08\u53CC\u51FB\u91CD\u7F6E\uFF09"
         },
         h16("span", { className: "dwb-resize-arrow" }, h16(IconFrame, { size: 13 }, h16("path", { d: "M9 6l6 6-6 6" })))
       )
@@ -26482,9 +26532,9 @@ function WorkbenchPanel(props) {
     h16(
       "div",
       {
-        ref: rootRef,
-        className: "dwb-root" + (resizing ? " dwb-dragging" : ""),
-        style: { width: width + "px" }
+        ref: geometry.rootRef,
+        className: "dwb-root" + (geometry.resizing ? " dwb-dragging" : ""),
+        style: { width: geometry.width + "px" }
       },
       h16(
         "div",
@@ -26493,10 +26543,10 @@ function WorkbenchPanel(props) {
         h16("span", { className: "dwb-headerspace" }),
         h16(
           TipButton,
-          { tip: "\u5237\u65B0", className: "dwb-iconbtn", onClick: refresh, disabled: refreshing },
-          h16("span", { className: refreshing ? "dwb-spin" : void 0 }, refreshIcon())
+          { tip: "\u5237\u65B0", className: "dwb-iconbtn", onClick: refresh, disabled: tree.refreshing },
+          h16("span", { className: tree.refreshing ? "dwb-spin" : void 0 }, refreshIcon())
         ),
-        h16(TipButton, { tip: "\u6536\u8D77\uFF08\u518D\u6B21\u70B9\u51FB\u5173\u95ED\uFF09", className: "dwb-iconbtn", onClick: collapseOrHide }, closeIcon())
+        h16(TipButton, { tip: "\u6536\u8D77\uFF08\u518D\u6B21\u70B9\u51FB\u5173\u95ED\uFF09", className: "dwb-iconbtn", onClick: geometry.collapseOrHide }, closeIcon())
       ),
       // 标签栏：水平排列标签 + "+" 按钮。
       h16(
@@ -26505,15 +26555,15 @@ function WorkbenchPanel(props) {
         h16(
           "div",
           { className: "dwb-tabbar-tabs" },
-          tabs.map((tab) => {
+          tabs.tabs.map((tab) => {
             const feat = getFeature(tab.featureId);
-            const isActive = tab.id === activeTabId;
+            const isActive = tab.id === tabs.activeTabId;
             return h16(
               "div",
               {
                 key: tab.id,
                 className: "dwb-tab" + (isActive ? " dwb-tab-active" : ""),
-                onClick: () => setActiveTabId(tab.id),
+                onClick: () => tabs.setActiveTabId(tab.id),
                 title: feat ? feat.label : tab.label
               },
               feat ? h16("span", { className: "dwb-tab-icon" }, feat.icon()) : null,
@@ -26525,7 +26575,7 @@ function WorkbenchPanel(props) {
                 "aria-label": "\u5173\u95ED",
                 onClick: (event) => {
                   event.stopPropagation();
-                  closeTab(tab.id);
+                  tabs.closeTab(tab.id);
                 }
               }, closeIcon(12)) : null
             );
@@ -26535,7 +26585,7 @@ function WorkbenchPanel(props) {
           type: "button",
           className: "dwb-tabbar-plus",
           title: "\u6253\u5F00\u529F\u80FD",
-          onClick: () => setActiveTabId(null)
+          onClick: () => tabs.setActiveTabId(null)
         }, "+")
       ),
       // 内容区：所有标签【常驻挂载】，非激活的用 display:none 隐藏。
@@ -26546,14 +26596,14 @@ function WorkbenchPanel(props) {
       h16(
         "div",
         { className: "dwb-content" },
-        tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
+        tabs.tabs.map((tab) => {
+          const isActive = tab.id === tabs.activeTabId;
           return h16("div", {
             key: tab.id,
             className: "dwb-pane" + (isActive ? "" : " dwb-pane-hidden")
           }, renderTabContent(tab, isActive));
         }),
-        activeTabId === null ? h16(FeatureGrid, { onSelect: openFeature }) : null
+        tabs.activeTabId === null ? h16(FeatureGrid, { onSelect: tabs.openFeature }) : null
       )
     )
   );
@@ -26657,7 +26707,7 @@ var name = "dsh-work";
 var inject = ["slots", "sessions"];
 function apply(ctx) {
   const sessions = ctx.get("sessions");
-  const WorkbenchPanelWithSessions = (props) => import_react16.default.createElement(WorkbenchPanel, { ...props, sessions });
+  const WorkbenchPanelWithSessions = (props) => import_react20.default.createElement(WorkbenchPanel, { ...props, sessions });
   ctx.effect(
     () => ctx.slots.inject("shell.overlay", () => ctx.slots.register({
       name: "shell.overlay",

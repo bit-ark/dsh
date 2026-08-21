@@ -1,7 +1,3 @@
-// src/routes.js
-import { createReadStream, statSync as statSync4 } from "node:fs";
-import { WebSocketServer } from "ws";
-
 // src/git.js
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -194,6 +190,9 @@ function failureReason(result, fallback) {
   }
   return result.error ?? fallback;
 }
+
+// src/validate.js
+import { statSync as statSync2 } from "node:fs";
 
 // src/files.js
 import { readdirSync, statSync } from "node:fs";
@@ -478,7 +477,6 @@ function openInEditor(absPath) {
 }
 
 // src/validate.js
-import { statSync as statSync2 } from "node:fs";
 function validatedFilePathValue(path) {
   if (typeof path !== "string" || path.length === 0 || path[0] !== "/" || path.includes("\0")) {
     return { error: "path must be an absolute path" };
@@ -494,7 +492,7 @@ function validatedFilePathValue(path) {
 function validatedFilePath(searchParams) {
   return validatedFilePathValue(searchParams.get("path"));
 }
-function validatedCwd(searchParams) {
+function validatedCwd2(searchParams) {
   const cwd = searchParams.get("cwd");
   if (typeof cwd !== "string" || cwd.length === 0 || cwd[0] !== "/" || cwd.includes("\0")) {
     return { error: "cwd must be an absolute path" };
@@ -576,6 +574,342 @@ function readWriteJsonBody(req) {
     req.on("aborted", () => resolve({}));
     req.on("close", () => resolve({}));
   });
+}
+
+// src/routes/shared.js
+function sendJson(res, code, payload) {
+  res.writeHead(code, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  res.end(JSON.stringify(payload));
+}
+function sendHtml(res, code, html) {
+  res.writeHead(code, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer"
+  });
+  res.end(html);
+}
+function escapeHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function isJsonRequest(req) {
+  const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json";
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// src/routes/git.js
+function mutation(mutate, showIgnoredAfter = false) {
+  return async (req, res) => {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+      return;
+    }
+    if (!isJsonRequest(req)) {
+      sendJson(res, 415, { ok: false, error: "content type must be application/json" });
+      return;
+    }
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const validated = validatedCwd2(url.searchParams);
+    if (validated.error !== void 0) {
+      sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const prepared = mutate(body);
+    if (prepared.error !== void 0) {
+      sendJson(res, 200, { ok: false, cwd: validated.cwd, error: prepared.error });
+      return;
+    }
+    try {
+      if (prepared.direct !== void 0) {
+        const outcome = await prepared.direct(validated.cwd);
+        if (outcome.ok !== true) {
+          sendJson(res, 200, { ok: false, cwd: validated.cwd, error: outcome.error ?? "git \u64CD\u4F5C\u5931\u8D25" });
+          return;
+        }
+      } else {
+        const result = await runGit(validated.cwd, prepared.args);
+        if (!result.ok) {
+          sendJson(res, 200, { ok: false, cwd: validated.cwd, error: failureReason(result, prepared.fallback ?? "git \u64CD\u4F5C\u5931\u8D25") });
+          return;
+        }
+      }
+      sendJson(res, 200, await inspect(validated.cwd, showIgnoredAfter));
+    } catch (error) {
+      sendJson(res, 200, { ok: false, cwd: validated.cwd, error: errorMessage(error) });
+    }
+  };
+}
+function registerGitRoutes(ctx) {
+  const offGit = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const validated = validatedCwd2(url.searchParams);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
+        return;
+      }
+      try {
+        sendJson(res, 200, await inspect(validated.cwd, url.searchParams.get("ignored") === "1"));
+      } catch (error) {
+        sendJson(res, 200, { ok: false, cwd: validated.cwd, error: errorMessage(error) });
+      }
+    }
+  });
+  const offInit = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/init",
+    handler: mutation(() => ({ direct: (cwd) => initRepo(cwd) }))
+  });
+  const offStage = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/stage",
+    handler: mutation((body) => {
+      const path = validatedRelPath(body);
+      if (path.error !== void 0) return { error: path.error };
+      return { args: ["add", "--", path.path], fallback: "git add \u5931\u8D25" };
+    })
+  });
+  const offUnstage = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/unstage",
+    handler: mutation((body) => {
+      const path = validatedRelPath(body);
+      if (path.error !== void 0) return { error: path.error };
+      return { direct: (cwd) => unstagePath(cwd, path.path) };
+    })
+  });
+  const offStageAll = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/stage-all",
+    handler: mutation(() => ({ args: ["add", "-A"], fallback: "\u5168\u90E8\u6682\u5B58\u5931\u8D25" }))
+  });
+  const offCommit = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/commit",
+    handler: mutation((body) => {
+      const message = validatedMessage(body);
+      if (message.error !== void 0) return { error: message.error };
+      return { args: ["commit", "-m", message.message], fallback: "\u63D0\u4EA4\u5931\u8D25" };
+    })
+  });
+  const offIgnore = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/ignore",
+    handler: mutation((body) => {
+      const path = validatedRelPath(body);
+      if (path.error !== void 0) return { error: path.error };
+      return { direct: (cwd) => addIgnore(cwd, path.path) };
+    }, true)
+  });
+  const offUnignore = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/git/unignore",
+    handler: mutation((body) => {
+      const path = validatedRelPath(body);
+      if (path.error !== void 0) return { error: path.error };
+      return { direct: (cwd) => removeIgnore(cwd, path.path) };
+    }, true)
+  });
+  return [offGit, offInit, offStage, offUnstage, offStageAll, offCommit, offIgnore, offUnignore];
+}
+
+// src/routes/files.js
+import { createReadStream, statSync as statSync3 } from "node:fs";
+function hasTraversal(path) {
+  return path.split("/").some((segment) => segment === "..");
+}
+function registerFileRoutes(ctx) {
+  const offDir = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/dir",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const params = new URLSearchParams();
+      params.set("cwd", url.searchParams.get("path") ?? "");
+      const validated = validatedCwd(params);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, path: validated.cwd, error: validated.error });
+        return;
+      }
+      sendJson(res, 200, listDir(validated.cwd));
+    }
+  });
+  const offFile = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/file",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const validated = validatedFilePath(url.searchParams);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
+        return;
+      }
+      try {
+        sendJson(res, 200, await filePreview(validated.path, url.searchParams.get("full") === "1"));
+      } catch (error) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: errorMessage(error) });
+      }
+    }
+  });
+  const offWrite = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/write",
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      if (!isJsonRequest(req)) {
+        sendJson(res, 415, { ok: false, error: "content type must be application/json" });
+        return;
+      }
+      const body = await readWriteJsonBody(req);
+      if (body === null) {
+        sendJson(res, 200, { ok: false, path: null, error: "\u5185\u5BB9\u8D85\u8FC7 1MB \u4E0A\u9650" });
+        return;
+      }
+      const validated = validatedFilePathValue(body?.path);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
+        return;
+      }
+      if (hasTraversal(validated.path)) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: "invalid path" });
+        return;
+      }
+      const checked = validatedWriteContent(body?.content);
+      if (checked.error !== void 0) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: checked.error });
+        return;
+      }
+      try {
+        sendJson(res, 200, await writeFileAtomic(validated.path, checked.content));
+      } catch (error) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: errorMessage(error) });
+      }
+    }
+  });
+  const offOpen = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/open",
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      if (!isJsonRequest(req)) {
+        sendJson(res, 415, { ok: false, error: "content type must be application/json" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const validated = validatedFilePathValue(body?.path);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
+        return;
+      }
+      if (hasTraversal(validated.path)) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: "invalid path" });
+        return;
+      }
+      try {
+        sendJson(res, 200, await openInEditor(validated.path));
+      } catch (error) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: errorMessage(error) });
+      }
+    }
+  });
+  const offAsset = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/asset",
+    handler: async (req, res) => {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const validated = validatedFilePath(url.searchParams);
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
+        return;
+      }
+      let stat;
+      try {
+        stat = statSync3(validated.path);
+      } catch (error) {
+        sendJson(res, 200, { ok: false, path: validated.path, error: `\u65E0\u6CD5\u8BFB\u53D6\u6587\u4EF6\uFF1A${errorMessage(error)}` });
+        return;
+      }
+      const contentType = contentTypeFor(validated.path);
+      const range = req.headers.range;
+      const match = typeof range === "string" ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+      if (match !== null && (match[1] !== "" || match[2] !== "")) {
+        const start = match[1] === "" ? Math.max(0, stat.size - Number(match[2])) : Number(match[1]);
+        const end = match[2] === "" || Number(match[2]) >= stat.size ? stat.size - 1 : Number(match[2]);
+        if (start <= end && start < stat.size) {
+          res.writeHead(206, {
+            "content-type": contentType,
+            "content-length": String(end - start + 1),
+            "content-range": `bytes ${start}-${end}/${stat.size}`,
+            "accept-ranges": "bytes",
+            "cache-control": "no-store"
+          });
+          if (req.method === "HEAD") {
+            res.end();
+            return;
+          }
+          const rangeStream = createReadStream(validated.path, { start, end });
+          req.on("close", () => rangeStream.destroy());
+          rangeStream.on("error", () => {
+            res.destroy();
+          }).pipe(res);
+          return;
+        }
+        res.writeHead(416, {
+          "content-range": `bytes */${stat.size}`,
+          "content-type": "application/json; charset=utf-8"
+        });
+        res.end(JSON.stringify({ ok: false, error: "range not satisfiable" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": contentType,
+        "content-length": String(stat.size),
+        "accept-ranges": "bytes",
+        "cache-control": "no-store"
+      });
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      const fullStream = createReadStream(validated.path);
+      req.on("close", () => fullStream.destroy());
+      fullStream.on("error", () => {
+        res.destroy();
+      }).pipe(res);
+    }
+  });
+  return [offDir, offFile, offWrite, offOpen, offAsset];
 }
 
 // src/browser.js
@@ -702,9 +1036,94 @@ async function proxyBrowser(targetUrl) {
   return { ok: true, html };
 }
 
+// src/routes/browser.js
+function registerBrowserRoutes(ctx) {
+  const offBrowser = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/browser",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const target = url.searchParams.get("url");
+      if (typeof target !== "string" || target.length === 0) {
+        sendHtml(res, 400, `<!doctype html><html><body><p>\u7F3A\u5C11 url \u53C2\u6570</p></body></html>`);
+        return;
+      }
+      if (!/^https?:\/\//i.test(target)) {
+        sendHtml(res, 400, `<!doctype html><html><body><p>\u4EC5\u652F\u6301 http/https \u534F\u8BAE</p></body></html>`);
+        return;
+      }
+      const result = await proxyBrowser(target);
+      if (!result.ok) {
+        sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;padding:24px;color:#666}</style></head><body><p>\u65E0\u6CD5\u52A0\u8F7D\u9875\u9762\uFF1A${escapeHtml(result.error)}</p></body></html>`);
+        return;
+      }
+      sendHtml(res, 200, result.html);
+    }
+  });
+  const offBrowserProbe = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/browser-probe",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const target = url.searchParams.get("url");
+      if (typeof target !== "string" || target.length === 0 || !/^https?:\/\//i.test(target)) {
+        sendJson(res, 400, { ok: false, error: "\u65E0\u6548\u7684 URL" });
+        return;
+      }
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8e3);
+        const response = await fetch(target, {
+          method: "HEAD",
+          signal: ctrl.signal,
+          redirect: "follow",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          }
+        });
+        clearTimeout(timer);
+        const xfo = response.headers.get("x-frame-options");
+        const csp = response.headers.get("content-security-policy");
+        let frameAncestors;
+        if (csp) {
+          for (const directive of csp.split(";")) {
+            const parts = directive.trim().split(/\s+/);
+            if (parts[0] === "frame-ancestors") {
+              const sources = parts.slice(1).filter((s) => s !== "");
+              if (sources.length > 0) frameAncestors = sources;
+              break;
+            }
+          }
+        }
+        sendJson(res, 200, {
+          reachable: true,
+          status: response.status,
+          url: response.url,
+          xFrameOptions: xfo || void 0,
+          frameAncestors
+        });
+      } catch {
+        sendJson(res, 200, { reachable: false });
+      }
+    }
+  });
+  return [offBrowser, offBrowserProbe];
+}
+
+// src/routes/terminal.js
+import { WebSocketServer } from "ws";
+
 // src/terminal.js
 import { randomBytes } from "node:crypto";
-import { chmodSync, statSync as statSync3 } from "node:fs";
+import { chmodSync, statSync as statSync4 } from "node:fs";
 import { dirname, join as join3, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 var MAX_TERMINAL_SESSIONS = 8;
@@ -778,7 +1197,7 @@ function ensureSpawnHelperExecutable() {
     const resolved = import.meta.resolve("node-pty");
     const ptyLibDir = fileURLToPath(new URL(".", resolved));
     const helper = normalize(join3(ptyLibDir, "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"));
-    const mode = statSync3(helper).mode;
+    const mode = statSync4(helper).mode;
     if ((mode & 73) === 0) chmodSync(helper, mode | 493);
   } catch {
   }
@@ -985,533 +1404,145 @@ function createTerminalManager(options = {}) {
   return { create, get, list, write, resize, kill: killById, attach, dispose };
 }
 
-// src/routes.js
-function registerRoutes(ctx) {
-  const sendJson = (res, code, payload) => {
-    res.writeHead(code, {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
-    });
-    res.end(JSON.stringify(payload));
-  };
-  const sendHtml = (res, code, html) => {
-    res.writeHead(code, {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer"
-    });
-    res.end(html);
-  };
-  const escapeHtml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const mutation = (mutate, showIgnoredAfter = false) => async (req, res) => {
-    if (req.method !== "POST") {
-      sendJson(res, 405, { ok: false, error: "method not allowed" });
-      return;
+// src/routes/terminal.js
+var TERMINAL_INPUT_MAX = 64 * 1024;
+function registerTerminalRoutes(ctx) {
+  const terminal = createTerminalManager();
+  const terminalWss = new WebSocketServer({ noServer: true });
+  const offTermCreate = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/terminal/create",
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      if (!isJsonRequest(req)) {
+        sendJson(res, 415, { ok: false, error: "content type must be application/json" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const validated = validatedCwd2(new URLSearchParams({ cwd: typeof body?.cwd === "string" ? body.cwd : "" }));
+      if (validated.error !== void 0) {
+        sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
+        return;
+      }
+      try {
+        sendJson(res, 200, { ok: true, ...await terminal.create({ cwd: validated.cwd, cols: body?.cols, rows: body?.rows }) });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, error: errorMessage(error) });
+      }
     }
-    const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-    if (mediaType !== "application/json") {
-      sendJson(res, 415, { ok: false, error: "content type must be application/json" });
-      return;
+  });
+  const offTermList = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/terminal/list",
+    handler: async (req, res) => {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, sessions: terminal.list() });
     }
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const validated = validatedCwd(url.searchParams);
-    if (validated.error !== void 0) {
-      sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
-      return;
+  });
+  const offTermKill = ctx.webServer.register({
+    kind: "exact",
+    path: "/workbench/terminal/kill",
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      if (!isJsonRequest(req)) {
+        sendJson(res, 415, { ok: false, error: "content type must be application/json" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      terminal.kill(typeof body?.id === "string" ? body.id : "");
+      sendJson(res, 200, { ok: true });
     }
-    const body = await readJsonBody(req);
-    const prepared = mutate(body);
-    if (prepared.error !== void 0) {
-      sendJson(res, 200, { ok: false, cwd: validated.cwd, error: prepared.error });
-      return;
-    }
-    try {
-      if (prepared.direct !== void 0) {
-        const outcome = await prepared.direct(validated.cwd);
-        if (outcome.ok !== true) {
-          sendJson(res, 200, { ok: false, cwd: validated.cwd, error: outcome.error ?? "git \u64CD\u4F5C\u5931\u8D25" });
-          return;
-        }
-      } else {
-        const result = await runGit(validated.cwd, prepared.args);
-        if (!result.ok) {
-          sendJson(res, 200, { ok: false, cwd: validated.cwd, error: failureReason(result, prepared.fallback ?? "git \u64CD\u4F5C\u5931\u8D25") });
-          return;
-        }
-      }
-      sendJson(res, 200, await inspect(validated.cwd, showIgnoredAfter));
-    } catch (error) {
-      sendJson(res, 200, { ok: false, cwd: validated.cwd, error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-  ctx.effect(() => {
-    const offDir = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/dir",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const params = new URLSearchParams();
-        params.set("cwd", url.searchParams.get("path") ?? "");
-        const validated = validatedCwd(params);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, path: validated.cwd, error: validated.error });
-          return;
-        }
-        sendJson(res, 200, listDir(validated.cwd));
-      }
-    });
-    const offFile = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/file",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const validated = validatedFilePath(url.searchParams);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
-          return;
-        }
-        try {
-          sendJson(res, 200, await filePreview(validated.path, url.searchParams.get("full") === "1"));
-        } catch (error) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    });
-    const offWrite = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/write",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-        if (mediaType !== "application/json") {
-          sendJson(res, 415, { ok: false, error: "content type must be application/json" });
-          return;
-        }
-        const body = await readWriteJsonBody(req);
-        if (body === null) {
-          sendJson(res, 200, { ok: false, path: null, error: "\u5185\u5BB9\u8D85\u8FC7 1MB \u4E0A\u9650" });
-          return;
-        }
-        const validated = validatedFilePathValue(body?.path);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
-          return;
-        }
-        if (validated.path.split("/").some((segment) => segment === "..")) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: "invalid path" });
-          return;
-        }
-        const checked = validatedWriteContent(body?.content);
-        if (checked.error !== void 0) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: checked.error });
-          return;
-        }
-        try {
-          sendJson(res, 200, await writeFileAtomic(validated.path, checked.content));
-        } catch (error) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    });
-    const offOpen = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/open",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-        if (mediaType !== "application/json") {
-          sendJson(res, 415, { ok: false, error: "content type must be application/json" });
-          return;
-        }
-        const body = await readJsonBody(req);
-        const validated = validatedFilePathValue(body?.path);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
-          return;
-        }
-        if (validated.path.split("/").some((segment) => segment === "..")) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: "invalid path" });
-          return;
-        }
-        try {
-          sendJson(res, 200, await openInEditor(validated.path));
-        } catch (error) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    });
-    const offAsset = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/asset",
-      handler: async (req, res) => {
-        if (req.method !== "GET" && req.method !== "HEAD") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const validated = validatedFilePath(url.searchParams);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a file" ? 200 : 400, { ok: false, path: validated.path, error: validated.error });
-          return;
-        }
-        let stat;
-        try {
-          stat = statSync4(validated.path);
-        } catch (error) {
-          sendJson(res, 200, { ok: false, path: validated.path, error: `\u65E0\u6CD5\u8BFB\u53D6\u6587\u4EF6\uFF1A${error instanceof Error ? error.message : String(error)}` });
-          return;
-        }
-        const contentType = contentTypeFor(validated.path);
-        const range = req.headers.range;
-        const match = typeof range === "string" ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-        if (match !== null && (match[1] !== "" || match[2] !== "")) {
-          const start = match[1] === "" ? Math.max(0, stat.size - Number(match[2])) : Number(match[1]);
-          const end = match[2] === "" || Number(match[2]) >= stat.size ? stat.size - 1 : Number(match[2]);
-          if (start <= end && start < stat.size) {
-            res.writeHead(206, {
-              "content-type": contentType,
-              "content-length": String(end - start + 1),
-              "content-range": `bytes ${start}-${end}/${stat.size}`,
-              "accept-ranges": "bytes",
-              "cache-control": "no-store"
-            });
-            if (req.method === "HEAD") {
-              res.end();
-              return;
-            }
-            const rangeStream = createReadStream(validated.path, { start, end });
-            req.on("close", () => rangeStream.destroy());
-            rangeStream.on("error", () => {
-              res.destroy();
-            }).pipe(res);
-            return;
-          }
-          res.writeHead(416, {
-            "content-range": `bytes */${stat.size}`,
-            "content-type": "application/json; charset=utf-8"
-          });
-          res.end(JSON.stringify({ ok: false, error: "range not satisfiable" }));
-          return;
-        }
-        res.writeHead(200, {
-          "content-type": contentType,
-          "content-length": String(stat.size),
-          "accept-ranges": "bytes",
-          "cache-control": "no-store"
-        });
-        if (req.method === "HEAD") {
-          res.end();
-          return;
-        }
-        const fullStream = createReadStream(validated.path);
-        req.on("close", () => fullStream.destroy());
-        fullStream.on("error", () => {
-          res.destroy();
-        }).pipe(res);
-      }
-    });
-    const offBrowser = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/browser",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const target = url.searchParams.get("url");
-        if (typeof target !== "string" || target.length === 0) {
-          sendHtml(res, 400, `<!doctype html><html><body><p>\u7F3A\u5C11 url \u53C2\u6570</p></body></html>`);
-          return;
-        }
-        if (!/^https?:\/\//i.test(target)) {
-          sendHtml(res, 400, `<!doctype html><html><body><p>\u4EC5\u652F\u6301 http/https \u534F\u8BAE</p></body></html>`);
-          return;
-        }
-        const result = await proxyBrowser(target);
-        if (!result.ok) {
-          sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;padding:24px;color:#666}</style></head><body><p>\u65E0\u6CD5\u52A0\u8F7D\u9875\u9762\uFF1A${escapeHtml(result.error)}</p></body></html>`);
-          return;
-        }
-        sendHtml(res, 200, result.html);
-      }
-    });
-    const offBrowserProbe = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/browser-probe",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const target = url.searchParams.get("url");
-        if (typeof target !== "string" || target.length === 0 || !/^https?:\/\//i.test(target)) {
-          sendJson(res, 400, { ok: false, error: "\u65E0\u6548\u7684 URL" });
-          return;
-        }
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8e3);
-          const response = await fetch(target, {
-            method: "HEAD",
-            signal: ctrl.signal,
-            redirect: "follow",
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            }
-          });
-          clearTimeout(timer);
-          const xfo = response.headers.get("x-frame-options");
-          const csp = response.headers.get("content-security-policy");
-          let frameAncestors;
-          if (csp) {
-            for (const directive of csp.split(";")) {
-              const parts = directive.trim().split(/\s+/);
-              if (parts[0] === "frame-ancestors") {
-                const sources = parts.slice(1).filter((s) => s !== "");
-                if (sources.length > 0) frameAncestors = sources;
-                break;
-              }
-            }
-          }
-          sendJson(res, 200, {
-            reachable: true,
-            status: response.status,
-            url: response.url,
-            xFrameOptions: xfo || void 0,
-            frameAncestors
-          });
-        } catch {
-          sendJson(res, 200, { reachable: false });
-        }
-      }
-    });
-    const terminal = createTerminalManager();
-    const terminalWss = new WebSocketServer({ noServer: true });
-    const offTermCreate = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/terminal/create",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-        if (mediaType !== "application/json") {
-          sendJson(res, 415, { ok: false, error: "content type must be application/json" });
-          return;
-        }
-        const body = await readJsonBody(req);
-        const validated = validatedCwd(new URLSearchParams({ cwd: typeof body?.cwd === "string" ? body.cwd : "" }));
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
-          return;
-        }
-        try {
-          sendJson(res, 200, { ok: true, ...await terminal.create({ cwd: validated.cwd, cols: body?.cols, rows: body?.rows }) });
-        } catch (error) {
-          sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    });
-    const offTermList = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/terminal/list",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        sendJson(res, 200, { ok: true, sessions: terminal.list() });
-      }
-    });
-    const offTermKill = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/terminal/kill",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase();
-        if (mediaType !== "application/json") {
-          sendJson(res, 415, { ok: false, error: "content type must be application/json" });
-          return;
-        }
-        const body = await readJsonBody(req);
-        terminal.kill(typeof body?.id === "string" ? body.id : "");
-        sendJson(res, 200, { ok: true });
-      }
-    });
-    const TERMINAL_INPUT_MAX = 64 * 1024;
-    const offTermWs = ctx.webServer.registerUpgrade({
-      path: "/workbench/terminal/ws",
-      handler: (req, socket, head) => {
-        const origin = req.headers.origin;
-        if (typeof origin === "string" && origin !== "") {
-          const host = req.headers.host;
-          if (origin !== `http://${host}` && origin !== `https://${host}`) {
-            socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-            socket.destroy();
-            return;
-          }
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const session = terminal.get(url.searchParams.get("id"));
-        if (session === void 0) {
-          socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+  });
+  const offTermWs = ctx.webServer.registerUpgrade({
+    path: "/workbench/terminal/ws",
+    handler: (req, socket, head) => {
+      const origin = req.headers.origin;
+      if (typeof origin === "string" && origin !== "") {
+        const host = req.headers.host;
+        if (origin !== `http://${host}` && origin !== `https://${host}`) {
+          socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
           socket.destroy();
           return;
         }
-        terminalWss.handleUpgrade(req, socket, head, (ws) => {
-          const detach = terminal.attach(session, ws);
-          ws.on("message", (raw) => {
-            let message;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const session = terminal.get(url.searchParams.get("id"));
+      if (session === void 0) {
+        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      terminalWss.handleUpgrade(req, socket, head, (ws) => {
+        const detach = terminal.attach(session, ws);
+        ws.on("message", (raw) => {
+          let message;
+          try {
+            message = JSON.parse(raw.toString());
+          } catch {
+            return;
+          }
+          if (message === null || typeof message !== "object") return;
+          if (message.t === "i" && typeof message.d === "string" && message.d.length <= TERMINAL_INPUT_MAX) {
+            terminal.write(session.id, message.d);
+          } else if (message.t === "b" && typeof message.d === "string" && message.d.length <= TERMINAL_INPUT_MAX) {
             try {
-              message = JSON.parse(raw.toString());
-            } catch {
-              return;
-            }
-            if (message === null || typeof message !== "object") return;
-            if (message.t === "i" && typeof message.d === "string" && message.d.length <= TERMINAL_INPUT_MAX) {
-              terminal.write(session.id, message.d);
-            } else if (message.t === "b" && typeof message.d === "string" && message.d.length <= TERMINAL_INPUT_MAX) {
-              try {
-                terminal.write(session.id, Buffer.from(message.d, "base64").toString("latin1"));
-              } catch {
-              }
-            } else if (message.t === "r" && typeof message.cols === "number" && typeof message.rows === "number") {
-              terminal.resize(session.id, message.cols, message.rows);
-            }
-          });
-          ws.on("close", () => {
-            detach();
-          });
-          ws.on("error", () => {
-            try {
-              ws.terminate();
+              terminal.write(session.id, Buffer.from(message.d, "base64").toString("latin1"));
             } catch {
             }
-          });
+          } else if (message.t === "r" && typeof message.cols === "number" && typeof message.rows === "number") {
+            terminal.resize(session.id, message.cols, message.rows);
+          }
         });
-      }
-    });
-    const offGit = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git",
-      handler: async (req, res) => {
-        if (req.method !== "GET") {
-          sendJson(res, 405, { ok: false, error: "method not allowed" });
-          return;
-        }
-        const url = new URL(req.url ?? "/", "http://localhost");
-        const validated = validatedCwd(url.searchParams);
-        if (validated.error !== void 0) {
-          sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
-          return;
-        }
-        try {
-          sendJson(res, 200, await inspect(validated.cwd, url.searchParams.get("ignored") === "1"));
-        } catch (error) {
-          sendJson(res, 200, { ok: false, cwd: validated.cwd, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    });
-    const offInit = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/init",
-      handler: mutation(() => ({ direct: (cwd) => initRepo(cwd) }))
-    });
-    const offStage = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/stage",
-      handler: mutation((body) => {
-        const path = validatedRelPath(body);
-        if (path.error !== void 0) return { error: path.error };
-        return { args: ["add", "--", path.path], fallback: "git add \u5931\u8D25" };
-      })
-    });
-    const offUnstage = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/unstage",
-      handler: mutation((body) => {
-        const path = validatedRelPath(body);
-        if (path.error !== void 0) return { error: path.error };
-        return { direct: (cwd) => unstagePath(cwd, path.path) };
-      })
-    });
-    const offStageAll = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/stage-all",
-      handler: mutation(() => ({ args: ["add", "-A"], fallback: "\u5168\u90E8\u6682\u5B58\u5931\u8D25" }))
-    });
-    const offCommit = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/commit",
-      handler: mutation((body) => {
-        const message = validatedMessage(body);
-        if (message.error !== void 0) return { error: message.error };
-        return { args: ["commit", "-m", message.message], fallback: "\u63D0\u4EA4\u5931\u8D25" };
-      })
-    });
-    const offIgnore = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/ignore",
-      handler: mutation((body) => {
-        const path = validatedRelPath(body);
-        if (path.error !== void 0) return { error: path.error };
-        return { direct: (cwd) => addIgnore(cwd, path.path) };
-      }, true)
-    });
-    const offUnignore = ctx.webServer.register({
-      kind: "exact",
-      path: "/workbench/git/unignore",
-      handler: mutation((body) => {
-        const path = validatedRelPath(body);
-        if (path.error !== void 0) return { error: path.error };
-        return { direct: (cwd) => removeIgnore(cwd, path.path) };
-      }, true)
-    });
+        ws.on("close", () => {
+          detach();
+        });
+        ws.on("error", () => {
+          try {
+            ws.terminate();
+          } catch {
+          }
+        });
+      });
+    }
+  });
+  return () => {
+    offTermCreate();
+    offTermList();
+    offTermKill();
+    offTermWs();
+    terminal.dispose();
+    try {
+      terminalWss.close();
+    } catch {
+    }
+  };
+}
+
+// src/routes.js
+function registerRoutes(ctx) {
+  ctx.effect(() => {
+    const cleanups = [
+      ...registerGitRoutes(ctx),
+      ...registerFileRoutes(ctx),
+      ...registerBrowserRoutes(ctx),
+      registerTerminalRoutes(ctx)
+    ];
     return () => {
-      offDir();
-      offFile();
-      offWrite();
-      offOpen();
-      offAsset();
-      offBrowser();
-      offBrowserProbe();
-      offTermCreate();
-      offTermList();
-      offTermKill();
-      offTermWs();
-      terminal.dispose();
-      try {
-        terminalWss.close();
-      } catch {
+      for (const dispose of cleanups) {
+        try {
+          dispose();
+        } catch {
+        }
       }
-      offGit();
-      offInit();
-      offStage();
-      offUnstage();
-      offStageAll();
-      offCommit();
-      offIgnore();
-      offUnignore();
     };
   }, "dsh-work: routes");
 }

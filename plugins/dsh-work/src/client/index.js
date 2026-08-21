@@ -7,9 +7,14 @@ import cssText from './styles.css'
 import React from 'react'
 import { WorkbenchPanel, installDockCoupling } from './panel.js'
 
+/** 插件行 id（client-modules 契约，必须与 build.mjs 的 PACKAGE_ID 一致）。 */
 export const name = 'dsh-work'
+/** 依赖注入：shell 插槽（overlay）+ 会话服务（任务看板「查看会话」跳转用）。 */
 export const inject = ['slots', 'sessions']
 
+/**
+ * 客户端半入口：注册 shell.overlay 工作面板 + 三列联动，并注入会话服务。
+ */
 export function apply(ctx) {
   // sessions 服务透传给工作面板：任务看板执行历史「查看会话」用其 open() 跳回
   // 对应 DSH 会话。用包装组件注入，避免改动 WorkbenchPanel 的标准 props 面。

@@ -9,6 +9,7 @@
  */
 import { isTaskPermission, isTaskStatus } from './domain.js'
 
+/** 任务看板 API 路径前缀（客户端与宿主路由共用）。 */
 export const TASKBOARD_API_PREFIX = '/workbench/taskboard'
 
 function record(value) {

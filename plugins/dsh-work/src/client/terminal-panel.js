@@ -92,6 +92,12 @@ function terminalWsUrl(id) {
   return proto + '://' + window.location.host + '/workbench/terminal/ws?id=' + encodeURIComponent(id)
 }
 
+/**
+ * 终端标签：xterm.js + WebSocket 双向流。
+ *
+ * 支持刷新重连（挂回同一 PTY 会话）、断线自动重连覆盖层、
+ * 退出/消失/错误状态提示。
+ */
 export function TerminalPanel(props) {
   const { sessionId, path, visible, onSessionReady } = props
   const containerRef = useRef(null)

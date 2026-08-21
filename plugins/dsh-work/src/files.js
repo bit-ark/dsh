@@ -6,6 +6,12 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { open, realpath, rename, rm } from 'node:fs/promises'
 
+/**
+ * 列目录：返回条目数组（最多 500 项，超限标记 truncated）。
+ *
+ * @param {string} absPath 目录绝对路径
+ * @returns {{ ok: true, path: string, entries: Array, truncated?: boolean } | { ok: false, path: string, error: string }}
+ */
 export function listDir(absPath) {
   let dirents
   try {

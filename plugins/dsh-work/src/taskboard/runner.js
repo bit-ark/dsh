@@ -32,6 +32,10 @@ export class SessionLaunchError extends Error {
   }
 }
 
+/**
+ * 任务执行运行器：通过 Host apiProxy 开真实 DSH 会话，观察 turn/end
+ * 事件结算 execution（会话已停止且无结果时保守结算 cancelled）。
+ */
 export class TaskboardRunner {
   /**
    * @param {object} api Host apiProxy 面（sessions/workspace/agentPresets）。

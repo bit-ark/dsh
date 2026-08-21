@@ -12,6 +12,7 @@
  *
  * 源码拆分（src/，见 README「结构」）：
  *   src/index.js + src/git.js + src/files.js + src/validate.js + src/routes.js
+ *     + src/routes/*.js（路由按功能拆分的模块）
  *     — 宿主半按域拆分（ESM，Node 原生解析）。
  *   src/client/*.js — 客户端半按功能拆分（渲染组件 / 高亮 / markdown / 编辑器）。
  *   src/client/vendor/ — 第三方构建产物（marked v18 UMD、CodeMirror 6 esbuild

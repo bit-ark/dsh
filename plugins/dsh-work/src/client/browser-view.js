@@ -73,6 +73,12 @@ function isEmbedBlocked(probe) {
   return false
 }
 
+/**
+ * 浏览器标签：地址栏 + iframe。
+ *
+ * 每次导航用 /workbench/browser-probe 探测目标站点是否拒绝被嵌入，
+ * 拒绝时提示并提供「在浏览器中打开 / 强制加载」两个动作。
+ */
 export function BrowserView(props) {
   const [url, setUrl] = useState(undefined)
   const [input, setInput] = useState('')

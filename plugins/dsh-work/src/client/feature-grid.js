@@ -8,6 +8,7 @@ import React from 'react'
 import { FEATURES } from './features.js'
 const h = React.createElement
 
+/** 功能网格首页：无激活标签时展示全部可用功能卡片。 */
 export function FeatureGrid(props) {
   const { onSelect } = props
   return h("div", { className: "dwb-feature-grid" },

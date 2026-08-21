@@ -7,6 +7,7 @@ import React from 'react'
 import { GitView } from './git-view.js'
 const h = React.createElement
 
+/** Git 面板：纯 props 透传包装（状态全部由 WorkbenchPanel 管理）。 */
 export function GitPanel(props) {
   return h(GitView, props)
 }

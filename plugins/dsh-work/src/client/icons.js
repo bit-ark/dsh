@@ -79,14 +79,17 @@ const h = React.createElement
 			h("path", { d: "M12 7v6M9 10h6" }),
 		);
 		export const chevronIcon = () => h(IconFrame, { size: 10 }, h("path", { d: "M9 6l6 6-6 6" }));
+/** 后退箭头图标。 */
 export const backIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M14 4l-7 8 7 8" }), h("path", { d: "M7 12h12" }));
+/** 前进箭头图标。 */
 export const forwardIcon = () => h(IconFrame, { size: 13 }, h("path", { d: "M10 4l7 8-7 8" }), h("path", { d: "M17 12H5" }));
+/** 浏览器地球图标。 */
 export const browserIcon = () => h(IconFrame, { size: 14 },
   h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }),
   h("path", { d: "M3 8h18" }),
   h("circle", { cx: "6", cy: "5.5", r: "0.8", fill: "currentColor" }),
 );
-// 终端图标：命令行提示符（>_）。
+/** 终端图标：命令行提示符（>_）。 */
 export const terminalIcon = () => h(IconFrame, { size: 14 },
   h("path", { d: "M4 5l4 4-4 4" }),
   h("path", { d: "M10 13h7" }),

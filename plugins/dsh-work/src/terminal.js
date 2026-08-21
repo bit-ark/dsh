@@ -20,8 +20,11 @@ import { chmodSync, statSync } from 'node:fs'
 import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+/** 终端会话数上限（超过拒绝创建）。 */
 export const MAX_TERMINAL_SESSIONS = 8
+/** 孤儿会话宽限：客户端断开后保留 PTY 的时间（期间刷新可重连接回）。 */
 export const TERMINAL_ORPHAN_GRACE_MS = 60_000
+/** 每会话输出环形缓冲上限（回放给新连接，防无限增长）。 */
 export const TERMINAL_RING_BYTES = 256 * 1024
 const TERMINAL_EXIT_LINGER_MS = 10_000
 const TERMINAL_KILL_ESCALATE_MS = 1200
