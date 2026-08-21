@@ -54,7 +54,8 @@
  * `rev-parse --git-dir`, branch via `rev-parse --abbrev-ref HEAD` with a
  * `symbolic-ref --short HEAD` fallback (an unborn branch on a fresh repo has
  * no revision yet), the commit graph via
- * `log --graph --all -n 60 --date=short --pretty=tformat:%x1e…` (the \x1e
+ * `log --graph --all -n 60 --pretty=tformat:%x1e…` (fields include the
+ * commit's unix timestamp `%at`; the \x1e
  * sentinel separates the graph column from the commit fields; lines without a
  * sentinel are pure graph continuation rows), and
  * `--no-optional-locks status --porcelain=v1 [--ignored]`

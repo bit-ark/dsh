@@ -159,6 +159,7 @@ var styles_default = `.dwb-root { position: absolute; top: 0; right: 0; bottom: 
 .dwb-graphrow[data-head] .dwb-hash { color: var(--dsw-alias-brand-text); font-weight: 700; }
 .dwb-graphcol { flex: none; color: var(--dsw-alias-label-tertiary); min-width: 12px; }
 .dwb-graphsubject { overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-primary); }
+.dwb-graphdate { flex: none; margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
 .dwb-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dsw-alias-brand-text); font-size: 12px; flex: none; }
 .dwb-headtag { flex: none; margin-left: auto; font-size: 10px; font-weight: 600; line-height: 1.6; padding: 0 6px; border-radius: 999px; background: var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-primary-foreground); letter-spacing: .03em; }
 .dwb-minibtn { flex: none; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); border-radius: 6px; cursor: pointer; }
@@ -14436,6 +14437,24 @@ var import_react7 = __toESM(require("react"), 1);
 // src/client/git-view.js
 var import_react6 = __toESM(require("react"), 1);
 var h6 = import_react6.default.createElement;
+var pad2 = (n) => String(n).padStart(2, "0");
+function toCommitDate(dateStr) {
+  const ts2 = Number(dateStr);
+  if (dateStr === "" || !Number.isFinite(ts2)) return void 0;
+  return new Date(ts2 * 1e3);
+}
+function shortCommitDate(dateStr) {
+  const d = toCommitDate(dateStr);
+  if (d === void 0) return dateStr;
+  const md = pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  if (d.getFullYear() === (/* @__PURE__ */ new Date()).getFullYear()) return md + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+  return d.getFullYear() + "-" + md;
+}
+function fullCommitDate(dateStr) {
+  const d = toCommitDate(dateStr);
+  if (d === void 0) return dateStr;
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+}
 function GitView(props) {
   const state = props.state;
   if (state.status === "loading") return h6("div", { className: "dwb-scroll" }, h6("div", { className: "dwb-note" }, "\u52A0\u8F7D\u4E2D\u2026"));
@@ -14492,11 +14511,12 @@ function GitView(props) {
           key: index,
           className: "dwb-graphrow",
           "data-head": isHead || void 0,
-          title: row.author !== "" ? row.author + " \xB7 " + row.date : void 0
+          title: row.author !== "" ? row.author + " \xB7 " + fullCommitDate(row.date) : void 0
         },
         h6("span", { className: "dwb-graphcol" }, row.graph === "" ? " " : row.graph),
         row.hash !== "" ? h6("span", { className: "dwb-hash" }, row.hash) : null,
         row.subject !== "" ? h6("span", { className: "dwb-graphsubject" }, row.subject) : null,
+        row.hash !== "" && row.date !== "" ? h6("span", { className: "dwb-graphdate" }, shortCommitDate(row.date)) : null,
         isHead ? h6("span", { className: "dwb-headtag" }, "HEAD") : null
       );
     })),

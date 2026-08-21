@@ -103,8 +103,9 @@ async function inspect(cwd, showIgnored = false) {
       "--all",
       "-n",
       String(MAX_GRAPH),
-      "--date=short",
-      "--pretty=tformat:%x1e%h%x1f%ad%x1f%an%x1f%s"
+      // %at = 提交时间 unix 秒（任何 git 版本都支持）；客户端负责本地时区
+      // 格式化（当年显示 MM-DD HH:mm，跨年显示 YYYY-MM-DD）。
+      "--pretty=tformat:%x1e%h%x1f%at%x1f%an%x1f%s"
     ]),
     (() => {
       const statusArgs = ["--no-optional-locks", "status", "--porcelain=v1"];

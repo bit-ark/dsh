@@ -5,6 +5,29 @@ import { badgeKind, stagedOf } from './helpers.js'
 import { banIcon, checkIcon, createIcon, eyeIcon, eyeOffIcon, minusIcon, plusIcon, refreshIcon, trayDownIcon, undoIcon } from './icons.js'
 const h = React.createElement
 
+// ── 提交时间格式化（宿主 %at 返回 unix 秒）───────────────────────────
+const pad2 = (n) => String(n).padStart(2, "0")
+function toCommitDate(dateStr) {
+	const ts = Number(dateStr)
+	if (dateStr === "" || !Number.isFinite(ts)) return undefined
+	return new Date(ts * 1000)
+}
+// 行内紧凑显示：当年「MM-DD HH:mm」，跨年「YYYY-MM-DD」；
+// 非时间戳的旧格式（如 "2026-08-22"）原样显示，保证宿主未重启时不空白。
+function shortCommitDate(dateStr) {
+	const d = toCommitDate(dateStr)
+	if (d === undefined) return dateStr
+	const md = pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
+	if (d.getFullYear() === new Date().getFullYear()) return md + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+	return d.getFullYear() + "-" + md
+}
+// 悬浮提示里的完整时间：YYYY-MM-DD HH:mm。
+function fullCommitDate(dateStr) {
+	const d = toCommitDate(dateStr)
+	if (d === undefined) return dateStr
+	return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+}
+
 		// ── Git tab ──────────────────────────────────────────────────────────
 		export function GitView(props) {
 			const state = props.state;
@@ -56,11 +79,12 @@ const h = React.createElement
 							key: index,
 							className: "dwb-graphrow",
 							"data-head": isHead || undefined,
-							title: row.author !== "" ? row.author + " · " + row.date : undefined,
+							title: row.author !== "" ? row.author + " · " + fullCommitDate(row.date) : undefined,
 						},
 							h("span", { className: "dwb-graphcol" }, row.graph === "" ? " " : row.graph),
 							row.hash !== "" ? h("span", { className: "dwb-hash" }, row.hash) : null,
 							row.subject !== "" ? h("span", { className: "dwb-graphsubject" }, row.subject) : null,
+							row.hash !== "" && row.date !== "" ? h("span", { className: "dwb-graphdate" }, shortCommitDate(row.date)) : null,
 							isHead ? h("span", { className: "dwb-headtag" }, "HEAD") : null,
 						);
 					})),
