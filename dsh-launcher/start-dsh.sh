@@ -5,10 +5,11 @@
 #  功能：
 #   1. 互斥锁保证同一时刻只有一个 launcher 在运行
 #      （进程存活 + 命令行匹配 + 终端可见 三重校验，残留锁自动清理/接管）
-#   2. 冷启动时检查更新：先快速探测仓库主机是否可达（直连 3s，失败走代理
-#      探测 3s，都不可达直接跳过）；可达才 git fetch（限时兜底），有更新则
-#      在 dev 分支上对 origin/master 做 --ff-only 快进合并（绝不覆盖本地
-#      修改），更新后按需 pnpm install && pnpm run build
+#   2. 冷启动时检查更新（仅当前停在 dev 分支）：先快速探测仓库主机是否可达
+#      （直连 3s，失败走代理探测 3s，都不可达直接跳过）；可达才 git fetch
+#      （限时兜底），有更新则对 origin/master 做 --ff-only 快进合并（绝不
+#      覆盖本地修改），更新后按需 pnpm install --frozen-lockfile &&
+#      pnpm run build
 #   3. 如果端口上已有 dsh 服务在运行，先关闭旧服务再重启；
 #      若端口被无关进程占用，则拒绝误杀并中止、提示换端口
 #   4. 启动 dsh web 服务
@@ -17,7 +18,7 @@
 #      （同终端重启不做更新检查，保持重启快捷）
 #
 #  环境变量：
-#     DSH_WEB_PORT=3081            使用其他端口
+#     DSH_WEB_PORT=3081            使用其他端口（必须为 1-65535 的数字）
 #     DSH_DRY_RUN=1                启动服务后不打开浏览器、不挂起（测试用；
 #                                  同时跳过更新检查）
 #     DSH_SKIP_UPDATE=1            显式跳过更新检查
@@ -36,6 +37,15 @@ set -o pipefail
 # ---------- 配置 ----------
 REPO="/Users/dl/DL/github/deepseek-harness"
 WEB_PORT="${DSH_WEB_PORT:-3080}"
+# 端口合法性校验：WEB_PORT 会被拼进 lsof/curl/osascript 等命令串，
+# 必须确保是 1-65535 的纯数字，防止注入或诡异报错
+case "$WEB_PORT" in
+  ''|*[!0-9]*) echo "错误: DSH_WEB_PORT 必须为纯数字 (当前: '${DSH_WEB_PORT:-}')" >&2; exit 1 ;;
+esac
+if [ "$WEB_PORT" -lt 1 ] || [ "$WEB_PORT" -gt 65535 ]; then
+  echo "错误: DSH_WEB_PORT 必须在 1-65535 之间 (当前: ${WEB_PORT})" >&2
+  exit 1
+fi
 WEB_URL="http://127.0.0.1:${WEB_PORT}"
 CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 LOG_DIR="$HOME/Library/Logs/dsh-launcher"
@@ -43,7 +53,8 @@ STATE_DIR="$HOME/Library/Application Support/dsh-launcher"
 LOCK_DIR="$STATE_DIR/launcher.lock"
 RESTART_TRIGGER="$STATE_DIR/restart.trigger"
 # 更新相关
-UPSTREAM_REF="origin/master"                 # 更新目标：合并进当前 dev 分支
+UPSTREAM_REF="origin/master"                 # 更新目标：快进合并的远程引用
+DEV_BRANCH="dev"                             # 分支守卫：自动更新仅在该分支上进行
 PROBE_TIMEOUT=3                              # 网络探测限时（秒），探测走 DNS+TCP+TLS
 DIRECT_TIMEOUT=8                             # 直连 fetch 限时（秒，探测通过后的兜底）
 PROXY_TIMEOUT=10                             # 代理 fetch 限时（秒，探测通过后的兜底）
@@ -242,7 +253,7 @@ probe_via_proxy() {
   curl -sI --max-time "$PROBE_TIMEOUT" -x "$PROXY_URL" "$PROBE_URL" >/dev/null 2>&1
 }
 
-# 检查并应用更新：探测+fetch（直连 → 失败走代理）→ 都失败跳过。
+# 检查并应用更新（仅限 dev 分支）：探测+fetch（直连 → 失败走代理）→ 都失败跳过。
 # 有更新且可快进（工作区干净 + 无本地提交）则 merge --ff-only $UPSTREAM_REF；
 # 成功时置 UPDATED=1 并记录 UPDATED_PREV（供构建失败时回退）。
 # 本函数永不阻塞启动：一切异常都只记日志并返回 0。
@@ -252,6 +263,12 @@ check_and_apply_update() {
   local head upstream cur_branch
   head="$(git rev-parse HEAD 2>/dev/null)" || { log "⚠ 仓库不是有效 git 仓库，跳过更新检查"; return 0; }
   cur_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  # 分支守卫：仅当当前确实停在 dev 分支才允许自动合并，防止切在其他
+  # 分支/旧 tag 上双击图标时被静默快进到 origin/master
+  if [ "$cur_branch" != "$DEV_BRANCH" ]; then
+    log "当前不在 ${DEV_BRANCH} 分支 (${cur_branch:-未知})，跳过更新检查"
+    return 0
+  fi
   compute_probe_url
 
   log "检查更新（分支: ${cur_branch}，目标: ${UPSTREAM_REF}；探测限时 ${PROBE_TIMEOUT}s，fetch 兜底直连 ${DIRECT_TIMEOUT}s/代理 ${PROXY_TIMEOUT}s）..."
@@ -359,7 +376,9 @@ maybe_build() {
   fi
 
   log "开始构建（${reason}）：pnpm install ..."
-  if ! pnpm install >>"$LOG_FILE" 2>&1; then
+  # --frozen-lockfile：自动构建禁止改写 lockfile（保证可复现、不弄脏仓库）；
+  # lockfile 与 package.json 不一致时直接失败，交给 on_build_failed 处理
+  if ! pnpm install --frozen-lockfile >>"$LOG_FILE" 2>&1; then
     on_build_failed
     return 0
   fi
@@ -463,8 +482,11 @@ say "dsh 已启动 ✔"
 # 注意：同终端重启不做更新检查，保持重启快捷。
 log "（双击桌面图标可在本终端内重启服务）"
 while true; do
-  if [ -f "$RESTART_TRIGGER" ]; then
-    rm -f "$RESTART_TRIGGER"
+  # 原子认领信号：mv 成功即独占本次请求，消除「判断存在与删除之间」
+  # dispatch 恰好再次写入导致新信号被误删的竞态窗口
+  if mv "$RESTART_TRIGGER" "$RESTART_TRIGGER.doing" 2>/dev/null; then
+    rm -f "$RESTART_TRIGGER.doing"
+    rotate_log
     log "收到重启请求，正在同一终端内重启服务..."
     if ! stop_server; then
       log "⚠ 无法停止旧服务，跳过本次重启（可稍后再次双击重试）"

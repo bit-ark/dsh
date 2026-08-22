@@ -65,13 +65,11 @@ PLIST="$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier 'com.local.dsh-launcher'" "$PLIST" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string 'com.local.dsh-launcher'" "$PLIST"
 
-# 5. 种子状态文件：若仓库已有构建产物，记录当前提交为「已构建版本」，
-#    避免首次启动时触发一次多余的完整构建
-if [ -d "$REPO/apps/web/dist" ]; then
-  if git -C "$REPO" rev-parse HEAD > "$STATE_DIR/last-built-commit" 2>/dev/null; then
-    echo "已记录当前构建版本: $(cut -c1-12 "$STATE_DIR/last-built-commit")"
-  fi
-fi
+# 5. 清理旧的「已构建版本」记录：该记录只证明「安装时 HEAD 是多少」，无法
+#    证明 dist 确实由当前提交构建（例如手动 pull 新代码后重装，会把新提交
+#    误标为已构建，launcher 从此跳过构建、长期服务过期 UI）。删掉后下次
+#    启动必做一次完整构建，宁可多等几分钟也不冒服务过期 UI 的风险。
+rm -f "$STATE_DIR/last-built-commit"
 
 # 6. 重新签名（osacompile 的临时签名在修改 bundle 后失效）
 if ! codesign --force --deep -s - "$APP_DIR" 2>/dev/null; then
