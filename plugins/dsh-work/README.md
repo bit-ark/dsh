@@ -4,8 +4,12 @@
 树、Git、浏览器（含 Eruda 调试面板）、多终端（node-pty + xterm.js，WebSocket 双向流）
 等功能，每个功能可同时运行多个实例，新功能通过注册机制即插即用。
 
+![工作面板功能网格](assets/workbench-grid.png)
+![Git 面板](assets/workbench-git.png)
+![终端面板](assets/workbench-terminal.png)
+
 - **面板**：右侧停靠（`shell.overlay` 插槽，id: workbench），可收起为右侧边缘按钮；
-  顶部路径框可手动指定工作目录（缺省跟随当前会话 cwd）。**宽度可拖拽调整**：拖动
+  工作目录固定跟随当前会话 cwd（不再提供手动路径输入）。**宽度可拖拽调整**：拖动
   面板左边缘改变整体宽度（最小 280px，最大 = 框架宽度 − 左侧栏宽度，即面板最宽盖满
   对话区但绝不遮挡左侧栏；跟随窗口缩放与 sidebar 折叠/展开自动重算）。**收起为两段式**：
   单击左缘手柄（或头部收起按钮）——面板宽于最窄时先动画收窄到 280px，已最窄时再
@@ -65,7 +69,7 @@
   含 fit addon），经 `/workbench/terminal/ws` WebSocket 双向流收发。**多终端同时运行**：
   「+」→ 终端可开任意多个标签（标签自动编号「终端 / 终端 2 / …」），每个标签是独立
   PTY 会话，进程在宿主常驻——所有标签常驻挂载，切换标签只切显隐，后台终端继续跑、
-  滚动回看不丢。工作目录取面板顶部路径框（缺省跟随会话 cwd）；面板拖宽/窗口缩放
+  滚动回看不丢。工作目录跟随当前会话 cwd；面板拖宽/窗口缩放
   自动 fit 并同步 PTY 尺寸。**连接韧性**：断线指数退避自动重连；宿主为每个会话保留
   最近 ~256KB 输出环形缓冲，切回/重连/刷新后回放近期内容；页面刷新在 60s 孤儿宽限内
   重连同会话（标签名经 localStorage 恢复）。进程退出/会话消失显示覆盖层，一键重新
@@ -139,6 +143,7 @@ src/client/     客户端半源码（按功能拆分）
   vendor/        marked v18（MIT）与 CodeMirror 6（BSD）构建产物，字节原样内联
 lib/index.js    构建产物：宿主半（ESM bundle，node）
 lib/client.js   构建产物：客户端半（__ModuleLoader__ 工厂 bundle，含内联 vendor）
+assets/         README 截图（workbench-grid / workbench-git / workbench-terminal）
 cordis.patch.yml  自带组合层：插入 dsh-work 行
 build.mjs       esbuild 双产物构建脚本
 test/classify.test.mjs  纯逻辑断言（文件分类 / MIME 映射 / 文本判定 / 写内容校验）
@@ -214,7 +219,7 @@ workbench 行），挂进 bundles 后须把 profile 自己 `cordis.patch.yml` �
 - 客户端半改动：直接刷新页面即可（bundle 按需从磁盘读取，no-cache）。
   dev:web watcher 不覆盖树外插件，属预期行为。
 - 发布 npm：`pnpm publish` 会经 `prepublishOnly` 钩子**自动先 build**，
-  无需手动执行；`files` 只发 `lib/` + `cordis.patch.yml`。
+  无需手动执行；`files` 只发 `lib/` + `assets/`（README 截图）+ `cordis.patch.yml`。
 
 ## 测试
 
