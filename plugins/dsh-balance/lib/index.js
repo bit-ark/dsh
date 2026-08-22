@@ -198,8 +198,19 @@ function platformAuthError() {
 // src/usage-fold.ts
 var DEFAULT_PEAK_HOURS = [9, 10, 11, 14, 15, 16, 17];
 var BEIJING_OFFSET_MS = 8 * 36e5;
+var WEEKEND_FLAT_START_MS = Date.UTC(2026, 7, 22, 16, 0, 0);
 function beijingHour(ms) {
   return new Date(ms + BEIJING_OFFSET_MS).getUTCHours();
+}
+function beijingDayOfWeek(ms) {
+  return new Date(ms + BEIJING_OFFSET_MS).getUTCDay();
+}
+function isPeakHour(ms, peakHours) {
+  if (ms >= WEEKEND_FLAT_START_MS) {
+    const day = beijingDayOfWeek(ms);
+    if (day === 0 || day === 6) return false;
+  }
+  return peakHours.includes(beijingHour(ms));
 }
 function costOfSample(sample, prices, peakHours) {
   if (prices === void 0) return void 0;
@@ -207,7 +218,7 @@ function costOfSample(sample, prices, peakHours) {
   if (price === void 0) return void 0;
   const missTokens = sample.buckets.uncachedInput + sample.buckets.cacheWrite;
   const base = missTokens / 1e6 * price.inputMiss + sample.buckets.cacheRead / 1e6 * price.inputHit + sample.buckets.output / 1e6 * price.output;
-  const peak = peakHours.includes(beijingHour(sample.time));
+  const peak = isPeakHour(sample.time, peakHours);
   return base * (peak ? 2 : 1);
 }
 function sumCost(samples, prices, peakHours) {
@@ -232,7 +243,7 @@ function splitTodayCost(samples, nowMs, prices, peakHours = DEFAULT_PEAK_HOURS) 
     const cost = costOfSample(sample, prices, peakHours);
     if (cost === void 0) continue;
     result.priced = true;
-    if (peakHours.includes(beijingHour(sample.time))) result.peak += cost;
+    if (isPeakHour(sample.time, peakHours)) result.peak += cost;
     else result.offPeak += cost;
   }
   result.total = result.peak + result.offPeak;
@@ -798,6 +809,7 @@ export {
   costOfSample,
   foldSessionUsage,
   inject,
+  isPeakHour,
   name,
   parsePlatformCostToday,
   splitTodayCost,

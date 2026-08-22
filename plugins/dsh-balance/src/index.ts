@@ -35,6 +35,7 @@ import {
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  isPeakHour,
   splitTodayCost,
   sumCost,
   sumSamples,
@@ -50,6 +51,7 @@ export {
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  isPeakHour,
   splitTodayCost,
   sumCost,
   sumSamples,
@@ -107,7 +109,11 @@ interface Config {
    * 未配置价格的模型不计费（费用显示为「—」）。
    */
   pricesPerM?: Record<string, ModelPrice>
-  /** 高峰时段（北京时间小时 0..23）；落在其中的请求按单价 ×2。默认 09:00–12:00 与 14:00–18:00。 */
+  /**
+   * 高峰时段（北京时间小时 0..23）；落在其中的请求按单价 ×2。默认 09:00–12:00
+   * 与 14:00–18:00。2026-08-23 起周末（周六、周日）全天不再区分峰谷，统一按
+   * 低谷价计费（该规则对自定义 peakHours 同样生效）。
+   */
   peakHours?: number[]
   /**
    * DeepSeek 平台会话 userToken（浏览器 localStorage 的值，非 API key）。

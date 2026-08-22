@@ -88,15 +88,39 @@ export type PriceTable = Record<string, ModelPrice>
  * 高峰时段（北京时间小时，0..23）。DeepSeek V4 官方（2026-08-17 生效）：每日
  * 北京时间 09:00–12:00 与 14:00–18:00 为高峰（正常价），其余时间为空闲/低谷
  * （价格约为高峰的一半）。峰谷按北京时间计时、对全球所有地区统一适用。
+ * 2026-08-23 起周末（周六、周日）全天不再区分峰谷，统一按低谷价计费。
  */
 export const DEFAULT_PEAK_HOURS = [9, 10, 11, 14, 15, 16, 17] as const
 
 /** 北京时区（UTC+8，中国无夏令时）。 */
 const BEIJING_OFFSET_MS = 8 * 3_600_000
+/**
+ * 周末统一低谷价生效时刻：北京时间 2026-08-23 00:00 = UTC 2026-08-22 16:00。
+ * 生效前周末仍按普通峰谷计费；生效后周六、周日全天按低谷价。
+ */
+const WEEKEND_FLAT_START_MS = Date.UTC(2026, 7, 22, 16, 0, 0)
 
 /** 一个时间戳的北京时间小时（0..23）。 */
 function beijingHour(ms: number): number {
   return new Date(ms + BEIJING_OFFSET_MS).getUTCHours()
+}
+
+/** 一个时间戳的北京星期几（0 = 周日，6 = 周六）。 */
+function beijingDayOfWeek(ms: number): number {
+  return new Date(ms + BEIJING_OFFSET_MS).getUTCDay()
+}
+
+/**
+ * 一个时间戳是否按高峰价计费：工作日（周一至周五）且北京时间小时落在
+ * `peakHours` 内。自 2026-08-23 起周末（周六、周日）全天按低谷价，
+ * 无论小时是否落在高峰时段。
+ */
+export function isPeakHour(ms: number, peakHours: readonly number[]): boolean {
+  if (ms >= WEEKEND_FLAT_START_MS) {
+    const day = beijingDayOfWeek(ms)
+    if (day === 0 || day === 6) return false
+  }
+  return peakHours.includes(beijingHour(ms))
 }
 
 /**
@@ -116,7 +140,7 @@ export function costOfSample(
   const base = missTokens / 1_000_000 * price.inputMiss
     + sample.buckets.cacheRead / 1_000_000 * price.inputHit
     + sample.buckets.output / 1_000_000 * price.output
-  const peak = peakHours.includes(beijingHour(sample.time))
+  const peak = isPeakHour(sample.time, peakHours)
   return base * (peak ? 2 : 1)
 }
 
@@ -168,7 +192,7 @@ export function splitTodayCost(
     const cost = costOfSample(sample, prices, peakHours)
     if (cost === undefined) continue
     result.priced = true
-    if (peakHours.includes(beijingHour(sample.time))) result.peak += cost
+    if (isPeakHour(sample.time, peakHours)) result.peak += cost
     else result.offPeak += cost
   }
   result.total = result.peak + result.offPeak

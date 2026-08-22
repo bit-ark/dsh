@@ -8,6 +8,7 @@ import {
   costOfSample,
   DEFAULT_PEAK_HOURS,
   foldSessionUsage,
+  isPeakHour,
   splitTodayCost,
   sumCost,
   sumSamples,
@@ -227,6 +228,57 @@ const header = { id: 'session-test' }
   const day = days.find(bucket => bucket.date === '2026-08-17')
   assert.ok(day !== undefined && day.cost > 0, 'day bucket accumulates cost')
   console.log('ok (j) cost estimation')
+}
+
+// ── (j2) 周末统一低谷价（2026-08-23 00:00 北京时间起生效）────────────────────
+{
+  // 北京时间构造（UTC+8）：周六/周日 10:00 = UTC 02:00；周一 10:00 = UTC 02:00。
+  const saturdayBefore = Date.UTC(2026, 7, 22, 2, 0)   // 北京 08-22（周六）10:00
+  const sundayAfter = Date.UTC(2026, 7, 23, 2, 0)      // 北京 08-23（周日）10:00
+  const sundayAfterOff = Date.UTC(2026, 7, 23, 10, 0)  // 北京 08-23（周日）18:00
+  const mondayAfter = Date.UTC(2026, 7, 24, 2, 0)      // 北京 08-24（周一）10:00
+  const nextSaturday = Date.UTC(2026, 7, 29, 2, 0)     // 北京 08-29（周六）10:00
+
+  // 规则生效前：周六高峰时段仍按高峰价（isPeakHour = true）。
+  assert.equal(isPeakHour(saturdayBefore, DEFAULT_PEAK_HOURS), true, '生效前周六 10:00 仍是高峰')
+  // 规则生效后：周日全天低谷（10:00 高峰时段也不计峰）。
+  assert.equal(isPeakHour(sundayAfter, DEFAULT_PEAK_HOURS), false, '生效后周日 10:00 是低谷')
+  assert.equal(isPeakHour(sundayAfterOff, DEFAULT_PEAK_HOURS), false, '生效后周日 18:00 是低谷')
+  // 规则生效后：工作日高峰时段照常计峰。
+  assert.equal(isPeakHour(mondayAfter, DEFAULT_PEAK_HOURS), true, '生效后周一 10:00 仍是高峰')
+  // 规则生效后：下一个周六同样全天低谷。
+  assert.equal(isPeakHour(nextSaturday, DEFAULT_PEAK_HOURS), false, '生效后周六 10:00 是低谷')
+
+  // 费用口径：同样的 100 万未命中输入，生效前周六高峰 ×2 = 3.0，
+  // 生效后周日 10:00 低谷 = 1.5，生效后周一 10:00 高峰 = 3.0。
+  const prices = {
+    'deepseek-v4-flash': { inputMiss: 1.5, inputHit: 0.05, output: 4.5 },
+  }
+  const mk = time => ({
+    time,
+    provider: 'deepseek-official',
+    model: 'deepseek-v4-flash',
+    buckets: { uncachedInput: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+  })
+  const costBefore = costOfSample(mk(saturdayBefore), prices, DEFAULT_PEAK_HOURS)
+  const costSunday = costOfSample(mk(sundayAfter), prices, DEFAULT_PEAK_HOURS)
+  const costMonday = costOfSample(mk(mondayAfter), prices, DEFAULT_PEAK_HOURS)
+  assert.ok(costBefore !== undefined && Math.abs(costBefore - 3.0) < 1e-9, `生效前周六高峰 ${String(costBefore)}`)
+  assert.ok(costSunday !== undefined && Math.abs(costSunday - 1.5) < 1e-9, `生效后周日低谷 ${String(costSunday)}`)
+  assert.ok(costMonday !== undefined && Math.abs(costMonday - 3.0) < 1e-9, `生效后周一高峰 ${String(costMonday)}`)
+
+  // 今日拆分口径：若「今天」是生效后的周日，全天消费都归 offPeak。
+  const nowSunday = Date.UTC(2026, 7, 23, 8, 0) // 北京 08-23（周日）16:00，作为 nowMs
+  const split = splitTodayCost(
+    [mk(sundayAfter), mk(sundayAfterOff)],
+    nowSunday,
+    prices,
+    DEFAULT_PEAK_HOURS,
+  )
+  assert.ok(Math.abs(split.peak - 0) < 1e-9, `周日 peak 应为 0，实际 ${String(split.peak)}`)
+  assert.ok(Math.abs(split.offPeak - 3.0) < 1e-9, `周日 offPeak 3.0，实际 ${String(split.offPeak)}`)
+  assert.ok(Math.abs(split.total - 3.0) < 1e-9, `周日 total 3.0，实际 ${String(split.total)}`)
+  console.log('ok (j2) weekend flat pricing')
 }
 
 // ── (k) 无效时间戳：折叠时即排除，全量与图表口径一致 ────────────────────────

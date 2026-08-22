@@ -29,6 +29,7 @@ var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
 var inject = ["slots"];
 var PEAK_HOURS = /* @__PURE__ */ new Set([9, 10, 11, 14, 15, 16, 17]);
+var WEEKEND_FLAT_START_MS = Date.UTC(2026, 7, 22, 16, 0, 0);
 var FOCUS_REFRESH_MIN_GAP_MS = 1e4;
 var REFRESH_STALE_MS = 3e5;
 var TICK_MS = 6e4;
@@ -72,6 +73,19 @@ function beijingHour(date) {
   }
   if (Number.isNaN(hour)) return -1;
   return hour % 24;
+}
+function beijingDayOfWeek(date) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      timeZone: "Asia/Shanghai"
+    }).formatToParts(date);
+    const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const short = parts.find((part) => part.type === "weekday")?.value ?? "";
+    return map[short] ?? date.getDay();
+  } catch {
+    return date.getDay();
+  }
 }
 var styles = {
   // footer 把动作排成一行水平 flex（flex-direction: row, nowrap）。宽栏条目
@@ -195,7 +209,9 @@ function BalanceFooterAction(props) {
       window.clearInterval(timer);
     };
   }, [load]);
-  const peakNow = PEAK_HOURS.has(beijingHour(/* @__PURE__ */ new Date()));
+  const now = /* @__PURE__ */ new Date();
+  const weekendFlat = now.getTime() >= WEEKEND_FLAT_START_MS && (beijingDayOfWeek(now) === 0 || beijingDayOfWeek(now) === 6);
+  const peakNow = !weekendFlat && PEAK_HOURS.has(beijingHour(now));
   let tooltip;
   let trackColor = "color-mix(in srgb, var(--dsw-alias-label-tertiary) 25%, transparent)";
   let stripBackground = "color-mix(in srgb, var(--dsw-alias-label-tertiary) 10%, transparent)";

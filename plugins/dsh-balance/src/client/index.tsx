@@ -52,9 +52,12 @@ type OnlinePayload =
  * 高峰时段（北京时间小时，0..23）——与宿主 usage-fold DEFAULT_PEAK_HOURS 一致：
  * DeepSeek V4 官方每日北京时间 09:00–12:00、14:00–18:00 为高峰（正常价），
  * 其余时间为低谷（价格约为高峰一半）。峰谷按北京时间计时，全球统一适用，
- * 与使用者所在地区无关。
+ * 与使用者所在地区无关。2026-08-23 起周末（周六、周日）全天不再区分峰谷，
+ * 统一按低谷价计费（消费段固定显示低谷绿）。
  */
 const PEAK_HOURS = new Set([9, 10, 11, 14, 15, 16, 17])
+/** 周末统一低谷价生效时刻：北京时间 2026-08-23 00:00 = UTC 2026-08-22 16:00。 */
+const WEEKEND_FLAT_START_MS = Date.UTC(2026, 7, 22, 16, 0, 0)
 
 /** 焦点刷新节流：从充值页切回时刷新一次，普通焦点抖动保持安静。 */
 const FOCUS_REFRESH_MIN_GAP_MS = 10_000
@@ -113,6 +116,24 @@ function beijingHour(date: Date): number {
   }
   if (Number.isNaN(hour)) return -1
   return hour % 24
+}
+
+/**
+ * 取北京时区的星期几（0 = 周日，6 = 周六）。Intl 不可用时回退本地时区
+ * （仅影响峰谷判定，不影响余额数据）。
+ */
+function beijingDayOfWeek(date: Date): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      timeZone: 'Asia/Shanghai',
+    }).formatToParts(date)
+    const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+    const short = parts.find(part => part.type === 'weekday')?.value ?? ''
+    return map[short] ?? date.getDay()
+  } catch {
+    return date.getDay()
+  }
 }
 
 const styles = {
@@ -252,7 +273,11 @@ function BalanceFooterAction(props: { wide?: boolean }): any {
   }, [load])
 
   // 当前时段：高峰 → 琥珀（警示「贵」），低谷 → 绿（「便宜，可用」）。
-  const peakNow = PEAK_HOURS.has(beijingHour(new Date()))
+  // 2026-08-23 起周末全天为低谷价：无论几点都显示低谷绿。
+  const now = new Date()
+  const weekendFlat = now.getTime() >= WEEKEND_FLAT_START_MS
+    && (beijingDayOfWeek(now) === 0 || beijingDayOfWeek(now) === 6)
+  const peakNow = !weekendFlat && PEAK_HOURS.has(beijingHour(now))
 
   // ── 状态推导：图上标注文本 + 进度条占比 + 配色 ────────────────────────
   // 正常态不挂 title：时段区分由颜色承担，余额/消费数值默认隐藏、悬停时显示。
