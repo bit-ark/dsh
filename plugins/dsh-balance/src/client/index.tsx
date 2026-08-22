@@ -67,10 +67,10 @@ const REFRESH_STALE_MS = 300_000
 const TICK_MS = 60_000
 
 /** 拉取 JSON；网络错误 / 非 2xx / 空响应统一抛可读错误。 */
-async function fetchJson(path: string): Promise<any> {
+async function fetchJson(path: string, init?: RequestInit): Promise<any> {
   let response: Response
   try {
-    response = await fetch(path, { headers: { accept: 'application/json' } })
+    response = await fetch(path, { ...init, headers: { accept: 'application/json', ...(init?.headers ?? {}) } })
   } catch (error) {
     throw new Error(`网络错误：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -212,6 +212,11 @@ function BalanceFooterAction(props: { wide?: boolean }): any {
   const [balanceError, setBalanceError] = useState<string | null>(null)
   const [online, setOnline] = useState<OnlinePayload | null>(null)
   const [onlineError, setOnlineError] = useState<string | null>(null)
+  // 平台 userToken 内联编辑：未配置 / 过期时把进度条换成输入框。
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [tokenSaving, setTokenSaving] = useState(false)
+  const [tokenError, setTokenError] = useState<string | null>(null)
+  const [tokenInputOpen, setTokenInputOpen] = useState(false)
   // 每分钟自增触发重渲染，让峰谷配色在 09:00 / 14:00 北京到点自动切换。
   const [, setTick] = useState(0)
   const [hovered, setHovered] = useState(false)
@@ -253,6 +258,56 @@ function BalanceFooterAction(props: { wide?: boolean }): any {
     lastFetchAt.current = Date.now()
   }, [])
 
+  // 把 userToken 写入 ~/.dsh/.credentials.yaml（harness credentials.set 机制，
+  // 与官方设置页存 API key 同一条链路），写入后宿主无需重启即可读到。
+  const saveToken = useCallback(async (raw: string): Promise<string | null> => {
+    const value = raw.trim()
+    if (value === '') return '请输入 userToken'
+    setTokenSaving(true)
+    setTokenError(null)
+    try {
+      const body = await fetchJson('/api/credentials.set', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: `dsh-balance-token-${Date.now()}`,
+          method: 'credentials.set',
+          payload: { ref: 'DEEPSEEK_PLATFORM_TOKEN', value },
+        }),
+      })
+      const result = body?.result
+      if (result === undefined || result.ok !== true) {
+        const error = result?.error
+        // credential-rejected：只读层（环境变量）遮蔽了该引用，写入会看似成功
+        // 但读取仍返回旧值——必须让用户去环境里改，而不是假装已保存。
+        if (error?.code === 'credential-rejected') {
+          return '当前 Token 由环境变量提供（只读），请在启动环境或 profile 配置中更新 DEEPSEEK_PLATFORM_TOKEN'
+        }
+        return `保存失败：${error?.message ?? '未知错误'}`
+      }
+      // 写入成功：立即重新拉 /online 验证新 token（凭证失效类错误不缓存，
+      // 因此无需等待 5 分钟缓存）。
+      const onlineResult = await fetchJson('/dsh-balance/online') as OnlinePayload
+      if (onlineResult.ok === true) {
+        setOnline(onlineResult)
+        setOnlineError(null)
+        return null
+      }
+      if (onlineResult.code === 'platform-auth') {
+        return 'Token 无效或已过期：请确认复制的是 platform.deepseek.com 的 userToken'
+      }
+      if (onlineResult.code === 'missing-token') {
+        return 'Token 已保存但未生效：请检查是否配置了更高优先级的 platformToken 行配置'
+      }
+      return `Token 已保存，但今日消费暂不可用：${onlineResult.message}`
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    } finally {
+      setTokenSaving(false)
+    }
+  }, [])
+
   useEffect(() => {
     void load()
     // 从官方充值页切回时应显示最新余额：window focus 触发，带节流。
@@ -271,6 +326,15 @@ function BalanceFooterAction(props: { wide?: boolean }): any {
       window.clearInterval(timer)
     }
   }, [load])
+
+  // 检测到未配置 / 失效 token 时自动弹出输入框（之后用户取消则收起，
+  // 页面刷新或下次错误时重新弹出）。
+  useEffect(() => {
+    if (online === null || online.ok === true) return
+    if (online.code === 'missing-token' || online.code === 'platform-auth') {
+      setTokenInputOpen(true)
+    }
+  }, [online])
 
   // 当前时段：高峰 → 琥珀（警示「贵」），低谷 → 绿（「便宜，可用」）。
   // 2026-08-23 起周末全天为低谷价：无论几点都显示低谷绿。
@@ -373,6 +437,109 @@ function BalanceFooterAction(props: { wide?: boolean }): any {
         <div style={styles.railBox} title={tooltip}>
           <div style={{ ...styles.railTrack, background: trackColor }}>
             {renderFill(styles.railFill)}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── 平台 userToken 内联编辑 ─────────────────────────────────────────
+  // 未配置（missing-token）或失效（platform-auth）时，把进度条换成输入框，
+  // 用户直接粘贴 token 保存（写入 credentials，无需改配置、无需重启）。
+  const tokenNeeded = online !== null && online.ok === false
+    && (online.code === 'missing-token' || online.code === 'platform-auth')
+  const showTokenInput = tokenNeeded && (tokenInputOpen || tokenError !== null || tokenSaving)
+
+  if (showTokenInput) {
+    const commit = async (): Promise<void> => {
+      const failure = await saveToken(tokenDraft)
+      if (failure === null) {
+        setTokenDraft('')
+        setTokenInputOpen(false)
+        setTokenError(null)
+      } else {
+        setTokenError(failure)
+      }
+    }
+    return (
+      <div style={styles.layer}>
+        <div
+          style={{
+            ...styles.strip,
+            background: stripBackground,
+            border: stripBorder,
+            gap: '5px',
+          }}
+        >
+          <div style={{ fontSize: '11px', lineHeight: '14px', color: 'var(--dsw-alias-label-secondary)' }}>
+            {online.code === 'platform-auth' ? 'Token 已失效，请更新' : '未配置平台 Token'}
+          </div>
+          <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="粘贴 userToken…"
+              value={tokenDraft}
+              disabled={tokenSaving}
+              onChange={(event) => { setTokenDraft(event.target.value); if (tokenError !== null) setTokenError(null) }}
+              onKeyDown={(event) => { if (event.key === 'Enter') void commit() }}
+              style={{
+                flex: '1 1 auto',
+                minWidth: 0,
+                padding: '3px 6px',
+                borderRadius: '6px',
+                border: '1px solid color-mix(in srgb, var(--dsw-alias-label-tertiary) 40%, transparent)',
+                background: 'var(--dsw-alias-bg-primary, transparent)',
+                color: 'var(--dsw-alias-label-primary)',
+                fontSize: '12px',
+                lineHeight: '16px',
+              }}
+            />
+            <button
+              type="button"
+              disabled={tokenSaving || tokenDraft.trim() === ''}
+              onClick={() => void commit()}
+              style={{
+                padding: '3px 8px',
+                borderRadius: '6px',
+                border: 'none',
+                background: 'var(--dsw-alias-state-success-primary)',
+                color: 'var(--dsw-alias-on-state, #fff)',
+                fontSize: '12px',
+                lineHeight: '16px',
+                cursor: tokenSaving || tokenDraft.trim() === '' ? 'default' : 'pointer',
+                opacity: tokenSaving || tokenDraft.trim() === '' ? 0.6 : 1,
+              }}
+            >
+              {tokenSaving ? '保存中…' : '保存'}
+            </button>
+            {!tokenSaving && (
+              <button
+                type="button"
+                onClick={() => { setTokenInputOpen(false); setTokenError(null) }}
+                style={{
+                  padding: '3px 6px',
+                  borderRadius: '6px',
+                  border: '1px solid color-mix(in srgb, var(--dsw-alias-label-tertiary) 40%, transparent)',
+                  background: 'transparent',
+                  color: 'var(--dsw-alias-label-secondary)',
+                  fontSize: '12px',
+                  lineHeight: '16px',
+                  cursor: 'pointer',
+                }}
+              >
+                取消
+              </button>
+            )}
+          </div>
+          {tokenError !== null && (
+            <div style={{ fontSize: '11px', lineHeight: '14px', color: 'var(--dsw-alias-state-error-primary)' }}>
+              {tokenError}
+            </div>
+          )}
+          <div style={{ fontSize: '11px', lineHeight: '14px', color: 'var(--dsw-alias-label-tertiary)' }}>
+            获取：platform.deepseek.com → F12 → Application → Local Storage → userToken
           </div>
         </div>
       </div>

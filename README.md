@@ -7,7 +7,7 @@ DeepSeek Harness Web GUI 插件集 —— **一个仓库托管多个独立插件
 | 插件（目录 / npm 包名） | 版本 | 功能 | 宿主半 | 客户端半 |
 |---|---|---|---|---|
 | `@bit-ark/dsh-archive` | 0.2.0 | 设置「归档」页：管理当前项目的归档会话（恢复 / 硬删除 / 一键批量删除 / 日志 ZIP 下载） | POST /dsh-archive/restore \| /delete \| /delete-all | settings.section（归档页） |
-| `@bit-ark/dsh-balance` | 0.4.6 | 侧边栏「DeepSeek 账户」小部件：进度条对比今日总余额与今日消费（官方平台账单，需配置 userToken），消费部分按当前峰谷时段配色 | GET /dsh-balance/balance \| /usage \| /online（只读） | sidebar.footer.action（账户小部件） |
+| `@bit-ark/dsh-balance` | 0.4.7 | 侧边栏「DeepSeek 账户」小部件：进度条对比今日总余额与今日消费（官方平台账单），token 未配置/失效时原地变输入框直接保存；消费部分按当前峰谷时段配色 | GET /dsh-balance/balance \| /usage \| /online（只读） | sidebar.footer.action（账户小部件） |
 | `@bit-ark/dsh-plugmgr` | 0.1.0 | 已安装插件管理器：设置-插件「插件管理」tab（列出 / 添加 / 按名称安装 / 移除 / 更新 / 启用 / 禁用，本地 / npm / Git 来源） | /local-plugins/list \| add \| add-named \| remove \| update \| set-enabled | settings.plugins.tab（插件管理页） |
 | `@bit-ark/dsh-notify` | 0.1.1 | 通用应用内通知：顶部 toast + 会话头铃铛/托盘，提供 `notifier` 客户端服务 | 占位（无路由） | toast 宿主 + conversation.session.header.utilities（铃铛） |
 | `@bit-ark/dsh-restart` | 0.1.0 | 设置「服务」页一键重启 dsh web：状态 + 两步确认重启，重启后服务在原终端窗口拉起（macOS） | GET /service/status \| POST /service/restart | settings.section（服务页） |
