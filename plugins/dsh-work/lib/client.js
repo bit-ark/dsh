@@ -53,7 +53,7 @@ module.exports = __toCommonJS(index_exports);
 
 // src/client/styles.css
 var styles_default = `.dwb-root { position: absolute; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--dsw-alias-bg-layer-2); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: -8px 0 24px rgba(0,0,0,.08); color: var(--dsw-alias-label-primary); font-size: 13px; overflow: hidden; }
-.dwb-header { display: flex; align-items: center; gap: 8px; padding: 12px 28px 0 20px; min-height: 44px; flex: none; box-sizing: border-box; }
+.dwb-header { display: flex; align-items: center; gap: 8px; padding: 12px 0 0 6px; min-height: 44px; flex: none; box-sizing: border-box; }
 .dwb-title { font-weight: 500; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-primary); flex: none; }
 .dwb-headerspace { flex: 1; min-width: 0; }
 .dwb-iconbtn { flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; padding: 0; }
