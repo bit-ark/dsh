@@ -33,10 +33,13 @@ Events，无需自动化/辅助功能权限）：
 ## 安装
 
 ```bash
-bash /Users/dl/DL/github/dsh/dsh-launcher/install.sh
+cd <本仓库目录>/plugins/dsh-launcher
+DSH_REPO=<deepseek-harness 仓库路径> bash install.sh
 ```
 
-安装后桌面出现 **dsh 一键启动** 图标（项目鲸鱼 logo）。
+仓库路径也可不传：在 deepseek-harness 仓库目录里运行 `bash install.sh`
+会自动探测（向上查找声明 `@deepseek-ai/dsh-root` 的目录）。安装后桌面出现
+**dsh 一键启动** 图标（项目鲸鱼 logo）。
 
 ## 使用
 
@@ -61,7 +64,7 @@ bash /Users/dl/DL/github/dsh/dsh-launcher/install.sh
 
 ```bash
 # 启动（效果同双击图标，可在终端看到进度）
-bash /Users/dl/DL/github/dsh/dsh-launcher/start-dsh.sh
+DSH_REPO=<deepseek-harness 仓库路径> bash <本仓库目录>/plugins/dsh-launcher/start-dsh.sh
 
 # 停止服务
 pkill -f 'apps/cli/src/bin.ts web'
@@ -70,14 +73,19 @@ pkill -f 'apps/cli/src/bin.ts web'
 tail -f "$HOME/Library/Logs/dsh-launcher/launcher.log"
 
 # 修改配置后重新安装桌面图标
-bash /Users/dl/DL/github/dsh/dsh-launcher/install.sh
+bash <本仓库目录>/plugins/dsh-launcher/install.sh
 ```
 
 ## 修改配置
 
-编辑 `start-dsh.sh` 顶部的配置区（仓库路径 `REPO`、端口 `WEB_PORT`、
+编辑 `start-dsh.sh` 顶部的配置区（端口 `WEB_PORT`、
 更新目标 `UPSTREAM_REF`、探测/直连/代理限时、代理地址等），然后重新运行
 `install.sh` 即可。
+
+仓库路径解析优先级：`DSH_REPO` 环境变量 > 安装时写入
+`~/Library/Application Support/dsh-launcher/repo.config` 的路径 > 自动探测
+（当前目录向上找 `@deepseek-ai/dsh-root`）。改名/移动 harness 目录后重新运行
+`install.sh` 即可更新。
 
 ## 调试环境变量
 

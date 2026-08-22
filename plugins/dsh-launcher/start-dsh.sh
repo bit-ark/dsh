@@ -35,7 +35,7 @@ set -u
 set -o pipefail
 
 # ---------- 配置 ----------
-REPO="/Users/dl/DL/github/deepseek-harness"
+REPO="${DSH_REPO:-}"
 WEB_PORT="${DSH_WEB_PORT:-3080}"
 # 端口合法性校验：WEB_PORT 会被拼进 lsof/curl/osascript 等命令串，
 # 必须确保是 1-65535 的纯数字，防止注入或诡异报错
@@ -62,9 +62,39 @@ PROXY_URL="${DSH_PROXY_HTTP:-http://127.0.0.1:7897}"
 mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/launcher.log"
 
-# ---------- 工具函数 ----------
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG_FILE"; }
 
+# ---------- 仓库路径解析 ----------
+# REPO 优先级：DSH_REPO 环境变量 > 自动探测（当前目录 → 脚本目录逐级向上，
+# 找 package.json 里声明 @deepseek-ai/dsh-root 的目录）> 报错提示。
+detect_repo() {
+  local start_dir
+  for start_dir in "$PWD" "$(cd "$(dirname "$0")" && pwd)"; do
+    local dir="$start_dir"
+    while [ "$dir" != "/" ]; do
+      if [ -f "$dir/package.json" ] && grep -q '"name": "@deepseek-ai/dsh-root"' "$dir/package.json" 2>/dev/null; then
+        echo "$dir"
+        return 0
+      fi
+      dir="$(dirname "$dir")"
+    done
+  done
+  return 1
+}
+
+if [ -z "$REPO" ]; then
+  REPO="$(detect_repo)" || true
+fi
+if [ -z "$REPO" ] && [ -f "$STATE_DIR/repo.config" ]; then
+  REPO="$(cat "$STATE_DIR/repo.config" | tr -d '[:space:]')"
+fi
+if [ -z "$REPO" ] || [ ! -d "$REPO" ]; then
+  echo "错误: 无法确定 deepseek-harness 仓库路径，请设置 DSH_REPO=/path/to/deepseek-harness 后再运行" >&2
+  exit 1
+fi
+log "使用仓库路径: $REPO"
+
+# ---------- 工具函数 ----------
 say() { osascript -e "display notification \"$1\" with title \"dsh 一键启动\"" >/dev/null 2>&1 || true; }
 
 # 日志轮转：超过 1MB 时移到 .1（只保留最近一代，避免日志无限增长）

@@ -18,13 +18,34 @@
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="/Users/dl/DL/github/deepseek-harness"
+REPO="${DSH_REPO:-}"
 DESKTOP="$HOME/Desktop"
 STATE_DIR="$HOME/Library/Application Support/dsh-launcher"
 APP_DIR="$STATE_DIR/dsh.app"
 DESKTOP_LINK="$DESKTOP/dsh 一键启动"
+REPO_CONFIG="$STATE_DIR/repo.config"
 
 echo "===== 安装 dsh 一键启动 ====="
+
+# 解析 deepseek-harness 仓库路径：DSH_REPO 环境变量优先，其次从当前目录
+# 逐级向上找声明 @deepseek-ai/dsh-root 的目录（常见于在 harness 目录里安装）。
+if [ -z "$REPO" ]; then
+  REPO="$(pwd)"
+  while [ "$REPO" != "/" ]; do
+    if [ -f "$REPO/package.json" ] && grep -q '"name": "@deepseek-ai/dsh-root"' "$REPO/package.json" 2>/dev/null; then
+      break
+    fi
+    REPO="$(dirname "$REPO")"
+  done
+  if [ "$REPO" = "/" ] || [ ! -d "$REPO" ]; then
+    echo "错误: 无法确定 deepseek-harness 仓库路径，请设置 DSH_REPO=/path/to/deepseek-harness 后再运行" >&2
+    exit 1
+  fi
+fi
+if [ ! -d "$REPO" ]; then
+  echo "错误: DSH_REPO 指向的目录不存在: $REPO" >&2
+  exit 1
+fi
 
 # 清理旧的桌面 app（旧版装在桌面）与旧快捷方式
 rm -rf "$DESKTOP/dsh.app" "$DESKTOP_LINK"
@@ -47,6 +68,8 @@ osacompile -o "$APP_DIR" "$TMP_AS"
 cp "$SRC_DIR/start-dsh.sh" "$APP_DIR/Contents/Resources/start-dsh.sh"
 cp "$SRC_DIR/dispatch.sh" "$APP_DIR/Contents/Resources/dispatch.sh"
 chmod 755 "$APP_DIR/Contents/Resources/start-dsh.sh" "$APP_DIR/Contents/Resources/dispatch.sh"
+mkdir -p "$STATE_DIR"
+echo "$REPO" > "$REPO_CONFIG"
 
 # 3. 应用图标（项目页面 logo，覆盖默认 applet 图标）
 "$SRC_DIR/build-icon.sh" "$REPO/apps/web/public/favicon.svg" "$APP_DIR/Contents/Resources/applet.icns"
