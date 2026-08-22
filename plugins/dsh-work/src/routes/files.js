@@ -6,7 +6,7 @@
  */
 import { createReadStream, statSync } from 'node:fs'
 import { contentTypeFor, filePreview, listDir, openInEditor, validatedWriteContent, writeFileAtomic } from '../files.js'
-import { readJsonBody, readWriteJsonBody, validatedFilePath, validatedFilePathValue } from '../validate.js'
+import { readJsonBody, readWriteJsonBody, validatedCwd, validatedFilePath, validatedFilePathValue } from '../validate.js'
 import { sendJson, isJsonRequest, errorMessage } from './shared.js'
 
 /** 请求体路径里是否含 `..` 段（二次防线，正常路径校验后仍可能有拼接路径）。 */

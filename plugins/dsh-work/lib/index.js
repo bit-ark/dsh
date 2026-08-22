@@ -492,7 +492,7 @@ function validatedFilePathValue(path) {
 function validatedFilePath(searchParams) {
   return validatedFilePathValue(searchParams.get("path"));
 }
-function validatedCwd2(searchParams) {
+function validatedCwd(searchParams) {
   const cwd = searchParams.get("cwd");
   if (typeof cwd !== "string" || cwd.length === 0 || cwd[0] !== "/" || cwd.includes("\0")) {
     return { error: "cwd must be an absolute path" };
@@ -615,7 +615,7 @@ function mutation(mutate, showIgnoredAfter = false) {
       return;
     }
     const url = new URL(req.url ?? "/", "http://localhost");
-    const validated = validatedCwd2(url.searchParams);
+    const validated = validatedCwd(url.searchParams);
     if (validated.error !== void 0) {
       sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
       return;
@@ -656,7 +656,7 @@ function registerGitRoutes(ctx) {
         return;
       }
       const url = new URL(req.url ?? "/", "http://localhost");
-      const validated = validatedCwd2(url.searchParams);
+      const validated = validatedCwd(url.searchParams);
       if (validated.error !== void 0) {
         sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
         return;
@@ -1422,7 +1422,7 @@ function registerTerminalRoutes(ctx) {
         return;
       }
       const body = await readJsonBody(req);
-      const validated = validatedCwd2(new URLSearchParams({ cwd: typeof body?.cwd === "string" ? body.cwd : "" }));
+      const validated = validatedCwd(new URLSearchParams({ cwd: typeof body?.cwd === "string" ? body.cwd : "" }));
       if (validated.error !== void 0) {
         sendJson(res, validated.error === "not a directory" ? 200 : 400, { ok: false, cwd: validated.cwd, error: validated.error });
         return;
